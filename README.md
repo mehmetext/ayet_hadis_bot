@@ -1,5 +1,35 @@
 # Ayet Hadis Bot
 
+Telegram bağlantısı henüz eklenmemiştir. Bu sürüm, QuranEnc ve HadeethEnc'den ilk eşitlemede aldığı içeriği kalıcı SQLite arşivinde tutar ve konsola yazar.
+
+Desteklenen teslim dilleri kod içinde sabittir: `ara`, `eng`, `tur`, `deu`. Ortam değişkenleri içerik kaynağını veya dili değiştirmez.
+
+## Komutlar
+
+```sh
+go run ./cmd/ayet-hadis-bot sync  # Eksik yerel arşivi indirir.
+go run ./cmd/ayet-hadis-bot once  # SQLite'tan bir ayet/hadis seçer.
+go run ./cmd/ayet-hadis-bot run   # Eşitleyip pencere içindeki slotlarda çalışır.
+```
+
+Operasyonel ayarlar:
+
+```env
+TIMEZONE=Europe/Istanbul
+SEND_WINDOW_START=06:30
+SEND_WINDOW_END=22:30
+DAILY_NOTIFICATION_COUNT=4
+DATA_DIR=/data
+```
+
+Docker'da SQLite dosyası `bot-data` volume'unda `/data/bot.db` olarak kalır:
+
+```sh
+docker compose up --build
+docker compose run --rm ayet-hadis-bot sync
+docker compose run --rm ayet-hadis-bot once
+```
+
 Bu ilk sürüm Telegram bağlantısı olmadan, seçilen bir ayet ve hadisi konsola yazdırır. Gönderim aralığı `CONTENT_INTERVAL` ile şimdiden yapılandırılabilir; Telegram scheduler'ı sonraki kapsamdır.
 
 ## Çalıştırma

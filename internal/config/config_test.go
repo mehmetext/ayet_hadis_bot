@@ -1,21 +1,20 @@
 package config
 
-import (
-	"os"
-	"testing"
-	"time"
-)
+import "testing"
 
-func TestLoadUsesConfigurableInterval(t *testing.T) {
-	t.Setenv("CONTENT_INTERVAL", "2h30m")
-
-	cfg, err := Load()
+func TestLoadUsesOperationalDefaults(t *testing.T) {
+	configuration, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.ContentInterval != 2*time.Hour+30*time.Minute {
-		t.Fatalf("interval = %s", cfg.ContentInterval)
+	if configuration.Timezone != "Europe/Istanbul" || configuration.SendWindowStart != "06:30" || configuration.SendWindowEnd != "22:30" || configuration.DailyNotificationCount != 4 || configuration.DataDirectory != "data" {
+		t.Fatalf("unexpected defaults: %#v", configuration)
 	}
+}
 
-	_ = os.Unsetenv("CONTENT_INTERVAL")
+func TestLoadRejectsInvalidNotificationCount(t *testing.T) {
+	t.Setenv("DAILY_NOTIFICATION_COUNT", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
 }

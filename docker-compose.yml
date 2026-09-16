@@ -3,9 +3,13 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      CONTENT_INTERVAL: ${CONTENT_INTERVAL:-4h}
-      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-15}
-      QURAN_EDITION: ${QURAN_EDITION:-quran-uthmani}
-      HADITH_EDITION: ${HADITH_EDITION:-eng-bukhari}
-      QURAN_VERSE_NUMBER: ${QURAN_VERSE_NUMBER:-1}
-      HADITH_NUMBER: ${HADITH_NUMBER:-1}
+      TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
+      SEND_WINDOW_START: ${SEND_WINDOW_START:-06:30}
+      SEND_WINDOW_END: ${SEND_WINDOW_END:-22:30}
+      DAILY_NOTIFICATION_COUNT: ${DAILY_NOTIFICATION_COUNT:-4}
+      DATA_DIR: /data
+    volumes:
+      - bot-data:/data
+
+volumes:
+  bot-data:
