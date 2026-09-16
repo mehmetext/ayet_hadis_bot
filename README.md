@@ -25,6 +25,14 @@ Ardından saat aralığı ve bildirim sayısını yalnız `.env` içinde değiş
 
 `CONSOLE_LANGUAGE` konsol akışının dilini (`ara`, `eng`, `tur` veya `deu`) belirler. Telegram kullanıcı tercihleri eklenene kadar gönderimler bu tek dil için yapılır.
 
+Telegram’ı çalıştırmak için `.env` içinde BotFather’dan aldığın token’ı doldur:
+
+```env
+TELEGRAM_BOT_TOKEN=bot-token-buraya
+```
+
+Token’ı Git’e veya loglara ekleme; `.env` dosyası `.gitignore` içindedir.
+
 `DATA_DIR=data` hem lokal kullanımda proje içindeki `data/bot.db` yolunu, hem Docker içinde kalıcı `bot-data` volume'unu ifade eder. Bu değeri normalde değiştirmen gerekmez.
 
 ```sh

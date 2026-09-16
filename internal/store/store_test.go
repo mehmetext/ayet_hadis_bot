@@ -58,6 +58,33 @@ func TestSchemaDoesNotCreateContentArchiveTables(t *testing.T) {
 	}
 }
 
+func TestTelegramUserLifecycle(t *testing.T) {
+	database := openTestDatabase(t)
+	ctx := context.Background()
+
+	if err := database.SaveTelegramUser(ctx, 42, "tur"); err != nil {
+		t.Fatal(err)
+	}
+	user, found, err := database.TelegramUser(ctx, 42)
+	if err != nil || !found || user.LanguageCode != "tur" || !user.Subscribed {
+		t.Fatalf("unexpected user: %#v, found=%v, err=%v", user, found, err)
+	}
+	if err := database.UnsubscribeTelegramUser(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	user, _, err = database.TelegramUser(ctx, 42)
+	if err != nil || user.Subscribed {
+		t.Fatalf("user should be unsubscribed: %#v, err=%v", user, err)
+	}
+	if err := database.SaveTelegramUser(ctx, 42, "eng"); err != nil {
+		t.Fatal(err)
+	}
+	users, err := database.SubscribedTelegramUsers(ctx, "eng")
+	if err != nil || len(users) != 1 || users[0] != 42 {
+		t.Fatalf("unexpected subscribed users: %#v, err=%v", users, err)
+	}
+}
+
 func openTestDatabase(t *testing.T) *Store {
 	t.Helper()
 	database, err := Open(":memory:")

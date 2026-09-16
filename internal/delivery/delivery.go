@@ -18,11 +18,12 @@ const reservationDuration = 24 * time.Hour
 const candidateAttempts = 100
 
 type Service struct {
-	Store    *store.Store
-	Selector selection.Selector
-	Quran    quranenc.Client
-	Hadith   hadeethenc.Client
-	Writer   io.Writer
+	Store       *store.Store
+	Selector    selection.Selector
+	Quran       quranenc.Client
+	Hadith      hadeethenc.Client
+	Writer      io.Writer
+	Broadcaster func(context.Context, string, string) error
 }
 
 func (service Service) Attempt(ctx context.Context, languageCode string, slot, now time.Time) error {
@@ -113,11 +114,13 @@ func (service Service) deliverVerse(ctx context.Context, language catalog.Langua
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
+	message := ""
 	if language.Code == "ara" {
-		_, err = fmt.Fprintf(service.Writer, "AYET — %d:%d\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, language.Attribution)
+		message = fmt.Sprintf("AYET — %d:%d\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, language.Attribution)
 	} else {
-		_, err = fmt.Fprintf(service.Writer, "AYET — %d:%d\n%s\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Translation, language.Attribution)
+		message = fmt.Sprintf("AYET — %d:%d\n%s\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Translation, language.Attribution)
 	}
+	err = service.write(ctx, language.Code, message)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
@@ -132,11 +135,23 @@ func (service Service) deliverHadith(ctx context.Context, language catalog.Langu
 	if reference == "" {
 		reference = hadith.Attribution
 	}
-	_, err = fmt.Fprintf(service.Writer, "HADİS — %s\n%s\nDerece: %s\nAçıklama: %s\nKaynak: %s\n", reference, hadith.Hadeeth, hadith.Grade, hadith.Explanation, language.Attribution)
+	message := fmt.Sprintf("HADİS — %s\n%s\nDerece: %s\nAçıklama: %s\nKaynak: %s\n", reference, hadith.Hadeeth, hadith.Grade, hadith.Explanation, language.Attribution)
+	err = service.write(ctx, language.Code, message)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
 	return service.Store.Complete(ctx, candidate, slot)
+}
+
+func (service Service) write(ctx context.Context, languageCode, message string) error {
+	if service.Broadcaster != nil {
+		return service.Broadcaster(ctx, languageCode, message)
+	}
+	if service.Writer == nil {
+		return fmt.Errorf("delivery output is not configured")
+	}
+	_, err := io.WriteString(service.Writer, message)
+	return err
 }
 func (service Service) failed(ctx context.Context, candidate store.Candidate, slot time.Time, attempts int, now time.Time, cause error) error {
 	if !retryable(cause) {

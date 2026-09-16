@@ -19,6 +19,7 @@ import (
 	"github.com/example/ayet-hadis-bot/internal/source/hadeethenc"
 	"github.com/example/ayet-hadis-bot/internal/source/quranenc"
 	"github.com/example/ayet-hadis-bot/internal/store"
+	"github.com/example/ayet-hadis-bot/internal/telegram"
 )
 
 func main() {
@@ -49,6 +50,15 @@ func main() {
 			logger.Printf("delivery: %v", err)
 		}
 	case "run":
+		if configuration.TelegramBotToken == "" {
+			logger.Fatal("TELEGRAM_BOT_TOKEN is required for run")
+		}
+		telegramBot, err := telegram.New(configuration.TelegramBotToken, database, logger)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		service.Broadcaster = telegramBot.Broadcast
+		go telegramBot.Start(ctx)
 		runSchedule(ctx, configuration, database, service, logger)
 	default:
 		logger.Fatalf("unknown command %q; use run or once", mode)
@@ -66,34 +76,11 @@ func runSchedule(ctx context.Context, configuration config.Config, database *sto
 		}
 		now := time.Now().In(location)
 		if inWindow(now, configuration, location) {
-			pending, err := database.HasPending(ctx, configuration.ConsoleLanguage)
+			languages, err := database.SubscribedTelegramLanguages(ctx)
 			if err != nil {
-				logger.Printf("read pending delivery: %v", err)
-			} else if pending {
-				if err := service.Attempt(ctx, configuration.ConsoleLanguage, now, now); err != nil {
-					logger.Printf("pending delivery: %v", err)
-				}
-			} else {
-				slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, configuration.DailyNotificationCount, location)
-				if err != nil {
-					logger.Printf("schedule: %v", err)
-					return
-				}
-				for _, slot := range slots {
-					if now.Before(slot) || now.Sub(slot) > 15*time.Second {
-						continue
-					}
-					claimed, err := database.ClaimSlot(ctx, configuration.ConsoleLanguage, slot)
-					if err != nil {
-						logger.Printf("claim slot: %v", err)
-						continue
-					}
-					if claimed {
-						if err := service.Attempt(ctx, configuration.ConsoleLanguage, slot, now); err != nil {
-							logger.Printf("delivery: %v", err)
-						}
-					}
-				}
+				logger.Printf("read subscribed languages: %v", err)
+			} else if err := deliverScheduled(ctx, now, configuration, database, service, languages, logger); err != nil {
+				logger.Printf("schedule: %v", err)
 			}
 		}
 		select {
@@ -103,6 +90,42 @@ func runSchedule(ctx context.Context, configuration config.Config, database *sto
 		case <-ticker.C:
 		}
 	}
+}
+
+func deliverScheduled(ctx context.Context, now time.Time, configuration config.Config, database *store.Store, service delivery.Service, languages []string, logger *log.Logger) error {
+	slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, configuration.DailyNotificationCount, now.Location())
+	if err != nil {
+		return err
+	}
+	for _, language := range languages {
+		pending, err := database.HasPending(ctx, language)
+		if err != nil {
+			logger.Printf("read pending delivery language=%s: %v", language, err)
+			continue
+		}
+		if pending {
+			if err := service.Attempt(ctx, language, now, now); err != nil {
+				logger.Printf("pending delivery language=%s: %v", language, err)
+			}
+			continue
+		}
+		for _, slot := range slots {
+			if now.Before(slot) || now.Sub(slot) > 15*time.Second {
+				continue
+			}
+			claimed, err := database.ClaimSlot(ctx, language, slot)
+			if err != nil {
+				logger.Printf("claim slot language=%s: %v", language, err)
+				continue
+			}
+			if claimed {
+				if err := service.Attempt(ctx, language, slot, now); err != nil {
+					logger.Printf("delivery language=%s: %v", language, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func inWindow(now time.Time, configuration config.Config, location *time.Location) bool {

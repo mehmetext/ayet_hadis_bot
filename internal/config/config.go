@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	TelegramBotToken       string
 	ConsoleLanguage        string
 	Timezone               string
 	SendWindowStart        string
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 	if err := loadEnvironmentFile(".env"); err != nil {
 		return Config{}, err
 	}
+	telegramToken := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 
 	timezone, err := requiredEnvironmentValue("TIMEZONE")
 	if err != nil {
@@ -64,7 +66,7 @@ func Load() (Config, error) {
 	if !validClock(start) || !validClock(end) || start >= end {
 		return Config{}, fmt.Errorf("SEND_WINDOW_START and SEND_WINDOW_END must be valid ordered HH:MM times")
 	}
-	return Config{ConsoleLanguage: consoleLanguage, Timezone: timezone, SendWindowStart: start, SendWindowEnd: end, DailyNotificationCount: count, DataDirectory: dataDirectory, HTTPTimeout: time.Duration(timeoutSeconds) * time.Second}, nil
+	return Config{TelegramBotToken: telegramToken, ConsoleLanguage: consoleLanguage, Timezone: timezone, SendWindowStart: start, SendWindowEnd: end, DailyNotificationCount: count, DataDirectory: dataDirectory, HTTPTimeout: time.Duration(timeoutSeconds) * time.Second}, nil
 }
 
 func positiveInteger(name string) (int, error) {

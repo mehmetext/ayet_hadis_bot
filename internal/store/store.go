@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 type ContentType string
 
@@ -32,6 +32,12 @@ type Pending struct {
 	NextAttemptAt time.Time
 }
 
+type TelegramUser struct {
+	ID           int64
+	LanguageCode string
+	Subscribed   bool
+}
+
 var ErrUnavailable = errors.New("candidate unavailable")
 
 type Store struct{ database *sql.DB }
@@ -50,6 +56,73 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 func (store *Store) Close() error { return store.database.Close() }
+
+func (store *Store) SaveTelegramUser(ctx context.Context, userID int64, languageCode string) error {
+	_, err := store.database.ExecContext(ctx, `INSERT INTO telegram_users(telegram_user_id, language_code, subscribed, created_at, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(telegram_user_id) DO UPDATE SET language_code=excluded.language_code, subscribed=1, updated_at=CURRENT_TIMESTAMP`, userID, languageCode)
+	if err != nil {
+		return fmt.Errorf("save Telegram user: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) UnsubscribeTelegramUser(ctx context.Context, userID int64) error {
+	_, err := store.database.ExecContext(ctx, `UPDATE telegram_users SET subscribed=0, updated_at=CURRENT_TIMESTAMP WHERE telegram_user_id=?`, userID)
+	if err != nil {
+		return fmt.Errorf("unsubscribe Telegram user: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) TelegramUser(ctx context.Context, userID int64) (TelegramUser, bool, error) {
+	var user TelegramUser
+	var subscribed int
+	err := store.database.QueryRowContext(ctx, `SELECT telegram_user_id, language_code, subscribed FROM telegram_users WHERE telegram_user_id=?`, userID).Scan(&user.ID, &user.LanguageCode, &subscribed)
+	if err == sql.ErrNoRows {
+		return TelegramUser{}, false, nil
+	}
+	if err != nil {
+		return TelegramUser{}, false, fmt.Errorf("read Telegram user: %w", err)
+	}
+	user.Subscribed = subscribed == 1
+	return user, true, nil
+}
+
+func (store *Store) SubscribedTelegramUsers(ctx context.Context, languageCode string) ([]int64, error) {
+	rows, err := store.database.QueryContext(ctx, `SELECT telegram_user_id FROM telegram_users WHERE language_code=? AND subscribed=1 ORDER BY telegram_user_id`, languageCode)
+	if err != nil {
+		return nil, fmt.Errorf("list Telegram users: %w", err)
+	}
+	defer rows.Close()
+	var users []int64
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("scan Telegram user: %w", err)
+		}
+		users = append(users, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Telegram users: %w", err)
+	}
+	return users, nil
+}
+
+func (store *Store) SubscribedTelegramLanguages(ctx context.Context) ([]string, error) {
+	rows, err := store.database.QueryContext(ctx, `SELECT DISTINCT language_code FROM telegram_users WHERE subscribed=1 ORDER BY language_code`)
+	if err != nil {
+		return nil, fmt.Errorf("list Telegram languages: %w", err)
+	}
+	defer rows.Close()
+	var languages []string
+	for rows.Next() {
+		var language string
+		if err := rows.Scan(&language); err != nil {
+			return nil, fmt.Errorf("scan Telegram language: %w", err)
+		}
+		languages = append(languages, language)
+	}
+	return languages, rows.Err()
+}
 
 func (store *Store) NextType(ctx context.Context, languageCode string) (ContentType, error) {
 	var value string
@@ -231,9 +304,14 @@ func (store *Store) migrate(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	} else if version != schemaVersion {
-		return fmt.Errorf("unsupported schema version: %s", version)
+		if version != "2" {
+			return fmt.Errorf("unsupported schema version: %s", version)
+		}
+		if _, err := store.database.ExecContext(ctx, `UPDATE schema_meta SET value=? WHERE key='schema_version'`, schemaVersion); err != nil {
+			return err
+		}
 	}
-	statements := []string{`CREATE TABLE IF NOT EXISTS delivery_state(language_code TEXT PRIMARY KEY, next_content_type TEXT NOT NULL, last_successful_slot TEXT)`, `CREATE TABLE IF NOT EXISTS delivery_cycles(language_code TEXT NOT NULL, content_type TEXT NOT NULL, cycle INTEGER NOT NULL, PRIMARY KEY(language_code, content_type))`, `CREATE TABLE IF NOT EXISTS delivery_history(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, cycle INTEGER NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id, cycle))`, `CREATE TABLE IF NOT EXISTS delivery_reservations(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id))`, `CREATE TABLE IF NOT EXISTS pending_deliveries(language_code TEXT PRIMARY KEY, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, slot_at TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL)`, `CREATE TABLE IF NOT EXISTS delivery_slots(language_code TEXT NOT NULL, slot_at TEXT NOT NULL, PRIMARY KEY(language_code, slot_at))`}
+	statements := []string{`CREATE TABLE IF NOT EXISTS delivery_state(language_code TEXT PRIMARY KEY, next_content_type TEXT NOT NULL, last_successful_slot TEXT)`, `CREATE TABLE IF NOT EXISTS delivery_cycles(language_code TEXT NOT NULL, content_type TEXT NOT NULL, cycle INTEGER NOT NULL, PRIMARY KEY(language_code, content_type))`, `CREATE TABLE IF NOT EXISTS delivery_history(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, cycle INTEGER NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id, cycle))`, `CREATE TABLE IF NOT EXISTS delivery_reservations(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id))`, `CREATE TABLE IF NOT EXISTS pending_deliveries(language_code TEXT PRIMARY KEY, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, slot_at TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL)`, `CREATE TABLE IF NOT EXISTS delivery_slots(language_code TEXT NOT NULL, slot_at TEXT NOT NULL, PRIMARY KEY(language_code, slot_at))`, `CREATE TABLE IF NOT EXISTS telegram_users(telegram_user_id INTEGER PRIMARY KEY, language_code TEXT NOT NULL, subscribed INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`}
 	for _, statement := range statements {
 		if _, err := store.database.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate database: %w", err)
