@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/ayet-hadis-bot/internal/catalog"
-	"github.com/example/ayet-hadis-bot/internal/selection"
-	"github.com/example/ayet-hadis-bot/internal/source/hadeethenc"
-	"github.com/example/ayet-hadis-bot/internal/source/quranenc"
-	"github.com/example/ayet-hadis-bot/internal/store"
+	"github.com/mehmetext/ayet-hadis-bot/internal/catalog"
+	"github.com/mehmetext/ayet-hadis-bot/internal/selection"
+	"github.com/mehmetext/ayet-hadis-bot/internal/source/hadeethenc"
+	"github.com/mehmetext/ayet-hadis-bot/internal/source/quranenc"
+	"github.com/mehmetext/ayet-hadis-bot/internal/store"
 )
 
 const reservationDuration = 24 * time.Hour

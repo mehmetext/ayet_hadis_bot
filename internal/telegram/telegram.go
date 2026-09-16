@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/ayet-hadis-bot/internal/catalog"
-	"github.com/example/ayet-hadis-bot/internal/store"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/mehmetext/ayet-hadis-bot/internal/catalog"
+	"github.com/mehmetext/ayet-hadis-bot/internal/store"
 )
 
 type UserStore interface {

@@ -12,14 +12,14 @@ import (
 
 	"math/rand"
 
-	"github.com/example/ayet-hadis-bot/internal/config"
-	"github.com/example/ayet-hadis-bot/internal/delivery"
-	"github.com/example/ayet-hadis-bot/internal/schedule"
-	"github.com/example/ayet-hadis-bot/internal/selection"
-	"github.com/example/ayet-hadis-bot/internal/source/hadeethenc"
-	"github.com/example/ayet-hadis-bot/internal/source/quranenc"
-	"github.com/example/ayet-hadis-bot/internal/store"
-	"github.com/example/ayet-hadis-bot/internal/telegram"
+	"github.com/mehmetext/ayet-hadis-bot/internal/config"
+	"github.com/mehmetext/ayet-hadis-bot/internal/delivery"
+	"github.com/mehmetext/ayet-hadis-bot/internal/schedule"
+	"github.com/mehmetext/ayet-hadis-bot/internal/selection"
+	"github.com/mehmetext/ayet-hadis-bot/internal/source/hadeethenc"
+	"github.com/mehmetext/ayet-hadis-bot/internal/source/quranenc"
+	"github.com/mehmetext/ayet-hadis-bot/internal/store"
+	"github.com/mehmetext/ayet-hadis-bot/internal/telegram"
 )
 
 func main() {

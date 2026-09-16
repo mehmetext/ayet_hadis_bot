@@ -1,4 +1,4 @@
-module github.com/example/ayet-hadis-bot
+module github.com/mehmetext/ayet-hadis-bot
 
 go 1.26
 
