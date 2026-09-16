@@ -20,20 +20,32 @@ func main() {
 	}
 
 	client := content.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+	ctx := context.Background()
+	printContent(ctx, client, cfg, logger)
+	logger.Printf("content interval configured as %s", cfg.ContentInterval.Round(time.Second))
+
+	ticker := time.NewTicker(cfg.ContentInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		printContent(ctx, client, cfg, logger)
+	}
+}
+
+func printContent(ctx context.Context, client *content.Client, cfg config.Config, logger *log.Logger) {
+	requestContext, cancel := context.WithTimeout(ctx, cfg.HTTPTimeout)
 	defer cancel()
 
-	verse, err := client.FetchQuranVerse(ctx, cfg.QuranVerseNumber, cfg.QuranEdition)
+	verse, err := client.FetchQuranVerse(requestContext, cfg.QuranVerseNumber, cfg.QuranEdition)
 	if err != nil {
-		logger.Fatal(err)
+		logger.Printf("fetch Quran verse: %v", err)
+		return
 	}
-	hadith, err := client.FetchHadith(ctx, cfg.HadithEdition, cfg.HadithNumber)
+	hadith, err := client.FetchHadith(requestContext, cfg.HadithEdition, cfg.HadithNumber)
 	if err != nil {
-		logger.Fatal(err)
+		logger.Printf("fetch hadith: %v", err)
+		return
 	}
 	if err := output.PrintContent(os.Stdout, verse, hadith); err != nil {
-		logger.Fatal(err)
+		logger.Printf("print content: %v", err)
 	}
-
-	logger.Printf("content interval configured as %s", cfg.ContentInterval.Round(time.Second))
 }

@@ -24,7 +24,7 @@ type hadithResponse struct {
 		Text         string `json:"text"`
 		Reference    struct {
 			Book   json.RawMessage `json:"book"`
-			Hadith int    `json:"hadith"`
+			Hadith int             `json:"hadith"`
 		} `json:"reference"`
 		Grades []struct {
 			Grade string `json:"grade"`
