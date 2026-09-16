@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 )
 
 const baseURL = "https://hadeethenc.com/api/v1"
@@ -21,6 +23,7 @@ type Hadith struct {
 	ID          string `json:"id"`
 	Hadeeth     string `json:"hadeeth"`
 	Attribution string `json:"attribution"`
+	Reference   string `json:"reference"`
 	Grade       string `json:"grade"`
 	Explanation string `json:"explanation"`
 }
@@ -34,23 +37,56 @@ func (client Client) RootCategories(ctx context.Context, languageCode string) ([
 	err := client.getJSON(ctx, "/categories/roots/?language="+url.QueryEscape(languageCode), &categories)
 	return categories, err
 }
-func (client Client) List(ctx context.Context, languageCode, categoryID string, page, perPage int) ([]Listing, int, error) {
+func (client Client) List(ctx context.Context, languageCode, categoryID string, page, perPage int) ([]Listing, int, int, error) {
 	var response struct {
 		Data []Listing `json:"data"`
 		Meta struct {
-			LastPage int `json:"last_page"`
+			LastPage   json.RawMessage `json:"last_page"`
+			TotalItems json.RawMessage `json:"total_items"`
 		} `json:"meta"`
 	}
 	path := fmt.Sprintf("/hadeeths/list/?language=%s&category_id=%s&page=%d&per_page=%d", url.QueryEscape(languageCode), url.QueryEscape(categoryID), page, perPage)
 	if err := client.getJSON(ctx, path, &response); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	return response.Data, response.Meta.LastPage, nil
+	lastPage, err := parseInteger(response.Meta.LastPage)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("parse HadeethEnc last page: %w", err)
+	}
+	totalItems, err := parseInteger(response.Meta.TotalItems)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("parse HadeethEnc total items: %w", err)
+	}
+	return response.Data, lastPage, totalItems, nil
+}
+
+func parseInteger(value json.RawMessage) (int, error) {
+	var number int
+	if err := json.Unmarshal(value, &number); err == nil {
+		return number, nil
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(text)
 }
 func (client Client) One(ctx context.Context, languageCode, hadithID string) (Hadith, error) {
 	var hadith Hadith
 	err := client.getJSON(ctx, "/hadeeths/one/?language="+url.QueryEscape(languageCode)+"&id="+url.QueryEscape(hadithID), &hadith)
 	return hadith, err
+}
+
+func (client Client) Multiple(ctx context.Context, languageCode string, hadithIDs []string) ([]Hadith, error) {
+	if len(hadithIDs) == 0 {
+		return nil, nil
+	}
+	var hadiths []Hadith
+	path := "/hadeeths/multiple/?language=" + url.QueryEscape(languageCode) + "&ids=" + url.QueryEscape(strings.Join(hadithIDs, ","))
+	if err := client.getJSON(ctx, path, &hadiths); err != nil {
+		return nil, err
+	}
+	return hadiths, nil
 }
 func (client Client) getJSON(ctx context.Context, path string, target any) error {
 	base := client.BaseURL

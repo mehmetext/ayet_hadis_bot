@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/example/ayet-hadis-bot/internal/config"
+	"github.com/example/ayet-hadis-bot/internal/delivery"
 	"github.com/example/ayet-hadis-bot/internal/schedule"
+	"github.com/example/ayet-hadis-bot/internal/selection"
 	"github.com/example/ayet-hadis-bot/internal/source/hadeethenc"
 	"github.com/example/ayet-hadis-bot/internal/source/quranenc"
 	"github.com/example/ayet-hadis-bot/internal/store"
-	"github.com/example/ayet-hadis-bot/internal/sync"
+	"math/rand"
 )
 
 const defaultLanguage = "tur"
@@ -35,7 +37,7 @@ func main() {
 	}
 	defer database.Close()
 	client := &http.Client{Timeout: configuration.HTTPTimeout}
-	synchronizer := sync.Service{Quran: sync.QuranSynchronizer{Client: quranenc.Client{HTTPClient: client}, Store: database}, Hadith: sync.HadithSynchronizer{Client: hadeethenc.Client{HTTPClient: client}, Store: database}, Logger: logger}
+	service := delivery.Service{Store: database, Selector: selection.Selector{Random: rand.New(rand.NewSource(time.Now().UnixNano())), Hadith: hadeethenc.Client{HTTPClient: client}}, Quran: quranenc.Client{HTTPClient: client}, Hadith: hadeethenc.Client{HTTPClient: client}, Writer: os.Stdout}
 	mode := "run"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
@@ -43,48 +45,70 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch mode {
-	case "sync":
-		synchronizer.SyncAll(ctx)
 	case "once":
-		printNext(ctx, database, logger)
+		if err := service.Attempt(ctx, defaultLanguage, time.Now(), time.Now()); err != nil {
+			logger.Printf("delivery: %v", err)
+		}
 	case "run":
-		synchronizer.SyncAll(ctx)
-		runSchedule(ctx, configuration, database, logger)
+		runSchedule(ctx, configuration, database, service, logger)
 	default:
-		logger.Fatalf("unknown command %q; use run, sync, or once", mode)
+		logger.Fatalf("unknown command %q; use run or once", mode)
 	}
 }
 
-func runSchedule(ctx context.Context, configuration config.Config, database *store.Store, logger *log.Logger) {
+func runSchedule(ctx context.Context, configuration config.Config, database *store.Store, service delivery.Service, logger *log.Logger) {
 	location, _ := time.LoadLocation(configuration.Timezone)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			logger.Printf("stopping: %v", err)
 			return
 		}
 		now := time.Now().In(location)
-		slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, configuration.DailyNotificationCount, location)
-		if err != nil {
-			logger.Printf("schedule: %v", err)
-			return
-		}
-		for _, slot := range slots {
-			if slot.Before(now) {
-				continue
-			}
-			if wait := time.Until(slot); wait > 0 {
-				if !waitFor(ctx, wait) {
-					logger.Printf("stopping: %v", ctx.Err())
+		if inWindow(now, configuration, location) {
+			pending, err := database.HasPending(ctx, defaultLanguage)
+			if err != nil {
+				logger.Printf("read pending delivery: %v", err)
+			} else if pending {
+				if err := service.Attempt(ctx, defaultLanguage, now, now); err != nil {
+					logger.Printf("pending delivery: %v", err)
+				}
+			} else {
+				slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, configuration.DailyNotificationCount, location)
+				if err != nil {
+					logger.Printf("schedule: %v", err)
 					return
 				}
+				for _, slot := range slots {
+					if now.Before(slot) || now.Sub(slot) > 15*time.Second {
+						continue
+					}
+					claimed, err := database.ClaimSlot(ctx, defaultLanguage, slot)
+					if err != nil {
+						logger.Printf("claim slot: %v", err)
+						continue
+					}
+					if claimed {
+						if err := service.Attempt(ctx, defaultLanguage, slot, now); err != nil {
+							logger.Printf("delivery: %v", err)
+						}
+					}
+				}
 			}
-			printNext(ctx, database, logger)
 		}
-		if !waitFor(ctx, time.Until(time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 1, 0, location))) {
+		select {
+		case <-ctx.Done():
 			logger.Printf("stopping: %v", ctx.Err())
 			return
+		case <-ticker.C:
 		}
 	}
+}
+
+func inWindow(now time.Time, configuration config.Config, location *time.Location) bool {
+	slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, 2, location)
+	return err == nil && !now.Before(slots[0]) && !now.After(slots[1])
 }
 
 func waitFor(ctx context.Context, duration time.Duration) bool {
@@ -96,22 +120,4 @@ func waitFor(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func printNext(ctx context.Context, database *store.Store, logger *log.Logger) {
-	contentType, err := database.NextContentType(ctx)
-	if err != nil {
-		logger.Printf("choose content type: %v", err)
-		return
-	}
-	item, err := database.SelectUndelivered(ctx, defaultLanguage, contentType)
-	if err != nil {
-		logger.Printf("select %s: %v", contentType, err)
-		return
-	}
-	if item.Type == store.ContentTypeVerse {
-		fmt.Printf("AYET — %s\n%s\n%s\nKaynak: %s\n", item.Reference, item.ArabicText, item.Text, item.Attribution)
-		return
-	}
-	fmt.Printf("HADİS — %s\n%s\nDerece: %s\nAçıklama: %s\nKaynak: %s\n", item.Reference, item.Text, item.Grade, item.Explanation, item.Attribution)
 }

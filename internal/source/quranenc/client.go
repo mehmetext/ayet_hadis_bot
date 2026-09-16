@@ -62,6 +62,28 @@ func (client Client) FetchSurah(ctx context.Context, translationKey string, sura
 	return verses, nil
 }
 
+func (client Client) FetchAyah(ctx context.Context, translationKey string, surahNumber, ayahNumber int) (Verse, error) {
+	var response struct {
+		Result struct {
+			Surah       string `json:"sura"`
+			Ayah        string `json:"aya"`
+			ArabicText  string `json:"arabic_text"`
+			Translation string `json:"translation"`
+		} `json:"result"`
+	}
+	if err := client.getJSON(ctx, fmt.Sprintf("/translation/aya/%s/%d/%d", url.PathEscape(translationKey), surahNumber, ayahNumber), &response); err != nil {
+		return Verse{}, err
+	}
+	var parsedSurah, parsedAyah int
+	if _, err := fmt.Sscanf(response.Result.Surah, "%d", &parsedSurah); err != nil {
+		return Verse{}, fmt.Errorf("parse surah: %w", err)
+	}
+	if _, err := fmt.Sscanf(response.Result.Ayah, "%d", &parsedAyah); err != nil {
+		return Verse{}, fmt.Errorf("parse ayah: %w", err)
+	}
+	return Verse{SurahNumber: parsedSurah, AyahNumber: parsedAyah, ArabicText: response.Result.ArabicText, Translation: response.Result.Translation}, nil
+}
+
 func (client Client) getJSON(ctx context.Context, path string, target any) error {
 	base := client.BaseURL
 	if base == "" {

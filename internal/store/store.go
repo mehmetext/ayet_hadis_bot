@@ -3,11 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+const schemaVersion = "2"
 
 type ContentType string
 
@@ -16,36 +19,22 @@ const (
 	ContentTypeHadith ContentType = "hadith"
 )
 
-type Store struct {
-	database *sql.DB
+type Candidate struct {
+	LanguageCode string
+	Type         ContentType
+	Source       string
+	ID           string
+}
+type Pending struct {
+	Candidate     Candidate
+	Slot          time.Time
+	Attempts      int
+	NextAttemptAt time.Time
 }
 
-type QuranVerse struct {
-	SurahNumber int
-	AyahNumber  int
-	ArabicText  string
-	Text        string
-}
+var ErrUnavailable = errors.New("candidate unavailable")
 
-type Hadith struct {
-	ID             string
-	CollectionName string
-	Reference      string
-	Text           string
-	Grade          string
-	Explanation    string
-}
-
-type DeliveredContent struct {
-	Type        ContentType
-	Language    string
-	ArabicText  string
-	Text        string
-	Reference   string
-	Grade       string
-	Explanation string
-	Attribution string
-}
+type Store struct{ database *sql.DB }
 
 func Open(path string) (*Store, error) {
 	database, err := sql.Open("sqlite", path)
@@ -60,238 +49,197 @@ func Open(path string) (*Store, error) {
 	}
 	return store, nil
 }
+func (store *Store) Close() error { return store.database.Close() }
 
-func (s *Store) Close() error {
-	return s.database.Close()
-}
-
-func (s *Store) IsSyncComplete(ctx context.Context, source, languageCode, editionKey string) (bool, error) {
-	var status string
-	err := s.database.QueryRowContext(ctx, `SELECT status FROM sync_state WHERE source = ? AND language_code = ? AND edition_key = ?`, source, languageCode, editionKey).Scan(&status)
+func (store *Store) NextType(ctx context.Context, languageCode string) (ContentType, error) {
+	var value string
+	err := store.database.QueryRowContext(ctx, `SELECT next_content_type FROM delivery_state WHERE language_code = ?`, languageCode).Scan(&value)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return ContentTypeVerse, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read sync state: %w", err)
-	}
-	return status == "completed", nil
-}
-
-func (s *Store) NextContentType(ctx context.Context) (ContentType, error) {
-	transaction, err := s.database.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin delivery state transaction: %w", err)
-	}
-	defer transaction.Rollback()
-
-	var next string
-	err = transaction.QueryRowContext(ctx, `SELECT value FROM delivery_state WHERE key = 'next_content_type'`).Scan(&next)
-	if err == sql.ErrNoRows {
-		next = string(ContentTypeVerse)
-	} else if err != nil {
 		return "", fmt.Errorf("read delivery state: %w", err)
 	}
-
-	contentType := ContentType(next)
-	if contentType != ContentTypeVerse && contentType != ContentTypeHadith {
-		return "", fmt.Errorf("invalid content type in delivery state: %q", contentType)
-	}
-	following := ContentTypeVerse
-	if contentType == ContentTypeVerse {
-		following = ContentTypeHadith
-	}
-	_, err = transaction.ExecContext(ctx, `
-		INSERT INTO delivery_state(key, value) VALUES ('next_content_type', ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value
-	`, following)
-	if err != nil {
-		return "", fmt.Errorf("write delivery state: %w", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		return "", fmt.Errorf("commit delivery state: %w", err)
-	}
-	return contentType, nil
+	return ContentType(value), nil
 }
 
-func (s *Store) ReplaceQuranEdition(ctx context.Context, languageCode, editionKey, publisher, attribution, version string, verses []QuranVerse) error {
-	if len(verses) != 6236 {
-		return fmt.Errorf("Quran edition %q has %d verses; want 6236", editionKey, len(verses))
-	}
-	transaction, err := s.database.BeginTx(ctx, nil)
+func (store *Store) Reserve(ctx context.Context, candidate Candidate, expiresAt time.Time) (bool, error) {
+	transaction, err := store.database.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin Quran import: %w", err)
+		return false, fmt.Errorf("begin reservation: %w", err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, `DELETE FROM quran_editions WHERE edition_key = ?`, editionKey); err != nil {
-		return fmt.Errorf("clear Quran edition: %w", err)
+	if _, err := transaction.ExecContext(ctx, `DELETE FROM delivery_reservations WHERE expires_at <= ?`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return false, fmt.Errorf("clear expired reservations: %w", err)
 	}
-	result, err := transaction.ExecContext(ctx, `INSERT INTO quran_editions(language_code, edition_key, publisher, attribution, source_version) VALUES (?, ?, ?, ?, ?)`, languageCode, editionKey, publisher, attribution, version)
+	cycle, err := currentCycle(ctx, transaction, candidate.LanguageCode, candidate.Type)
 	if err != nil {
-		return fmt.Errorf("insert Quran edition: %w", err)
+		return false, err
 	}
-	editionID, err := result.LastInsertId()
+	var count int
+	err = transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM delivery_history WHERE language_code=? AND content_type=? AND source=? AND content_id=? AND cycle=?`, candidate.LanguageCode, candidate.Type, candidate.Source, candidate.ID, cycle).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("read Quran edition ID: %w", err)
+		return false, fmt.Errorf("check delivery history: %w", err)
 	}
-	statement, err := transaction.PrepareContext(ctx, `INSERT INTO quran_verses(edition_id, surah_number, ayah_number, arabic_text, text) VALUES (?, ?, ?, ?, ?)`)
+	if count > 0 {
+		return false, nil
+	}
+	_, err = transaction.ExecContext(ctx, `INSERT INTO delivery_reservations(language_code, content_type, source, content_id, expires_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(language_code, content_type, source, content_id) DO NOTHING`, candidate.LanguageCode, candidate.Type, candidate.Source, candidate.ID, expiresAt.UTC().Format(time.RFC3339))
 	if err != nil {
-		return fmt.Errorf("prepare Quran verse import: %w", err)
+		return false, fmt.Errorf("reserve candidate: %w", err)
 	}
-	defer statement.Close()
-	for _, verse := range verses {
-		if _, err := statement.ExecContext(ctx, editionID, verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Text); err != nil {
-			return fmt.Errorf("insert Quran verse: %w", err)
-		}
+	result, err := transaction.ExecContext(ctx, `SELECT changes()`)
+	if err != nil {
+		return false, fmt.Errorf("read reservation result: %w", err)
 	}
-	return commitSyncState(ctx, transaction, "quranenc", languageCode, editionKey, len(verses), version)
+	changed, _ := result.RowsAffected()
+	if err := transaction.Commit(); err != nil {
+		return false, fmt.Errorf("commit reservation: %w", err)
+	}
+	return changed == 1, nil
 }
 
-func (s *Store) ReplaceHadithEdition(ctx context.Context, languageCode, editionKey, publisher, attribution, version string, hadiths []Hadith) error {
-	if len(hadiths) == 0 {
-		return fmt.Errorf("hadith edition %q has no records", editionKey)
-	}
-	transaction, err := s.database.BeginTx(ctx, nil)
+func (store *Store) Complete(ctx context.Context, candidate Candidate, slot time.Time) error {
+	transaction, err := store.database.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin hadith import: %w", err)
+		return fmt.Errorf("begin completion: %w", err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, `DELETE FROM hadith_editions WHERE edition_key = ?`, editionKey); err != nil {
-		return fmt.Errorf("clear hadith edition: %w", err)
-	}
-	result, err := transaction.ExecContext(ctx, `INSERT INTO hadith_editions(language_code, edition_key, publisher, attribution, source_version) VALUES (?, ?, ?, ?, ?)`, languageCode, editionKey, publisher, attribution, version)
+	cycle, err := currentCycle(ctx, transaction, candidate.LanguageCode, candidate.Type)
 	if err != nil {
-		return fmt.Errorf("insert hadith edition: %w", err)
+		return err
 	}
-	editionID, err := result.LastInsertId()
+	_, err = transaction.ExecContext(ctx, `INSERT INTO delivery_history(language_code, content_type, source, content_id, cycle, delivered_at) VALUES (?, ?, ?, ?, ?, ?)`, candidate.LanguageCode, candidate.Type, candidate.Source, candidate.ID, cycle, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
-		return fmt.Errorf("read hadith edition ID: %w", err)
+		return fmt.Errorf("record delivery history: %w", err)
 	}
-	statement, err := transaction.PrepareContext(ctx, `INSERT INTO hadiths(edition_id, source_id, collection_name, reference, text, grade, explanation) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	next := ContentTypeVerse
+	if candidate.Type == ContentTypeVerse {
+		next = ContentTypeHadith
+	}
+	_, err = transaction.ExecContext(ctx, `INSERT INTO delivery_state(language_code, next_content_type, last_successful_slot) VALUES (?, ?, ?) ON CONFLICT(language_code) DO UPDATE SET next_content_type=excluded.next_content_type, last_successful_slot=excluded.last_successful_slot`, candidate.LanguageCode, next, slot.UTC().Format(time.RFC3339))
 	if err != nil {
-		return fmt.Errorf("prepare hadith import: %w", err)
+		return fmt.Errorf("advance delivery state: %w", err)
 	}
-	defer statement.Close()
-	for _, hadith := range hadiths {
-		if _, err := statement.ExecContext(ctx, editionID, hadith.ID, hadith.CollectionName, hadith.Reference, hadith.Text, hadith.Grade, hadith.Explanation); err != nil {
-			return fmt.Errorf("insert hadith: %w", err)
-		}
+	if _, err = transaction.ExecContext(ctx, `DELETE FROM delivery_reservations WHERE language_code=? AND content_type=? AND source=? AND content_id=?`, candidate.LanguageCode, candidate.Type, candidate.Source, candidate.ID); err != nil {
+		return fmt.Errorf("clear reservation: %w", err)
 	}
-	return commitSyncState(ctx, transaction, "hadeethenc", languageCode, editionKey, len(hadiths), version)
-}
-
-func (s *Store) SelectUndelivered(ctx context.Context, languageCode string, contentType ContentType) (DeliveredContent, error) {
-	transaction, err := s.database.BeginTx(ctx, nil)
-	if err != nil {
-		return DeliveredContent{}, fmt.Errorf("begin content selection: %w", err)
-	}
-	defer transaction.Rollback()
-	content, contentID, err := selectUndelivered(ctx, transaction, languageCode, contentType)
-	if err == sql.ErrNoRows {
-		if _, clearErr := transaction.ExecContext(ctx, `DELETE FROM delivery_history WHERE language_code = ? AND content_type = ?`, languageCode, contentType); clearErr != nil {
-			return DeliveredContent{}, fmt.Errorf("reset delivery history: %w", clearErr)
-		}
-		content, contentID, err = selectUndelivered(ctx, transaction, languageCode, contentType)
-	}
-	if err != nil {
-		return DeliveredContent{}, fmt.Errorf("select local %s: %w", contentType, err)
-	}
-	if _, err := transaction.ExecContext(ctx, `INSERT INTO delivery_history(content_type, language_code, content_id, delivered_at) VALUES (?, ?, ?, ?)`, contentType, languageCode, contentID, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		return DeliveredContent{}, fmt.Errorf("record delivery history: %w", err)
+	if _, err = transaction.ExecContext(ctx, `DELETE FROM pending_deliveries WHERE language_code=?`, candidate.LanguageCode); err != nil {
+		return fmt.Errorf("clear pending delivery: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
-		return DeliveredContent{}, fmt.Errorf("commit content selection: %w", err)
-	}
-	return content, nil
-}
-
-func commitSyncState(ctx context.Context, transaction *sql.Tx, source, languageCode, editionKey string, count int, version string) error {
-	_, err := transaction.ExecContext(ctx, `INSERT INTO sync_state(source, language_code, edition_key, status, expected_count, imported_count, source_version, completed_at) VALUES (?, ?, ?, 'completed', ?, ?, ?, ?) ON CONFLICT(source, language_code, edition_key) DO UPDATE SET status = 'completed', expected_count = excluded.expected_count, imported_count = excluded.imported_count, source_version = excluded.source_version, last_error = '', completed_at = excluded.completed_at`, source, languageCode, editionKey, count, count, version, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("write sync state: %w", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("commit import: %w", err)
+		return fmt.Errorf("commit delivery completion: %w", err)
 	}
 	return nil
 }
 
-func selectUndelivered(ctx context.Context, transaction *sql.Tx, languageCode string, contentType ContentType) (DeliveredContent, string, error) {
-	if contentType == ContentTypeVerse {
-		var content DeliveredContent
-		var id string
-		err := transaction.QueryRowContext(ctx, `SELECT v.edition_id || ':' || v.surah_number || ':' || v.ayah_number, v.arabic_text, v.text, v.surah_number || ':' || v.ayah_number, e.attribution FROM quran_verses v JOIN quran_editions e ON e.id = v.edition_id WHERE e.language_code = ? AND NOT EXISTS (SELECT 1 FROM delivery_history h WHERE h.content_type = 'verse' AND h.language_code = ? AND h.content_id = v.edition_id || ':' || v.surah_number || ':' || v.ayah_number) ORDER BY RANDOM() LIMIT 1`, languageCode, languageCode).Scan(&id, &content.ArabicText, &content.Text, &content.Reference, &content.Attribution)
-		content.Type, content.Language = ContentTypeVerse, languageCode
-		return content, id, err
+func (store *Store) Release(ctx context.Context, candidate Candidate) error {
+	_, err := store.database.ExecContext(ctx, `DELETE FROM delivery_reservations WHERE language_code=? AND content_type=? AND source=? AND content_id=?`, candidate.LanguageCode, candidate.Type, candidate.Source, candidate.ID)
+	if err != nil {
+		return fmt.Errorf("release reservation: %w", err)
 	}
-	var content DeliveredContent
-	var id string
-	err := transaction.QueryRowContext(ctx, `SELECT h.edition_id || ':' || h.id, h.text, h.reference, h.grade, h.explanation, e.attribution FROM hadiths h JOIN hadith_editions e ON e.id = h.edition_id WHERE e.language_code = ? AND NOT EXISTS (SELECT 1 FROM delivery_history x WHERE x.content_type = 'hadith' AND x.language_code = ? AND x.content_id = h.edition_id || ':' || h.id) ORDER BY RANDOM() LIMIT 1`, languageCode, languageCode).Scan(&id, &content.Text, &content.Reference, &content.Grade, &content.Explanation, &content.Attribution)
-	content.Type, content.Language = ContentTypeHadith, languageCode
-	return content, id, err
+	return nil
+}
+func (store *Store) SavePending(ctx context.Context, pending Pending) error {
+	_, err := store.database.ExecContext(ctx, `INSERT INTO pending_deliveries(language_code, content_type, source, content_id, slot_at, attempts, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(language_code) DO UPDATE SET content_type=excluded.content_type, source=excluded.source, content_id=excluded.content_id, slot_at=excluded.slot_at, attempts=excluded.attempts, next_attempt_at=excluded.next_attempt_at`, pending.Candidate.LanguageCode, pending.Candidate.Type, pending.Candidate.Source, pending.Candidate.ID, pending.Slot.UTC().Format(time.RFC3339), pending.Attempts, pending.NextAttemptAt.UTC().Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("save pending delivery: %w", err)
+	}
+	return nil
+}
+func (store *Store) Pending(ctx context.Context, languageCode string) (Pending, bool, error) {
+	var pending Pending
+	var slot, next string
+	err := store.database.QueryRowContext(ctx, `SELECT content_type, source, content_id, slot_at, attempts, next_attempt_at FROM pending_deliveries WHERE language_code=?`, languageCode).Scan(&pending.Candidate.Type, &pending.Candidate.Source, &pending.Candidate.ID, &slot, &pending.Attempts, &next)
+	if err == sql.ErrNoRows {
+		return Pending{}, false, nil
+	}
+	if err != nil {
+		return Pending{}, false, fmt.Errorf("read pending delivery: %w", err)
+	}
+	pending.Candidate.LanguageCode = languageCode
+	pending.Slot, _ = time.Parse(time.RFC3339, slot)
+	pending.NextAttemptAt, _ = time.Parse(time.RFC3339, next)
+	return pending, true, nil
+}
+func (store *Store) PendingDue(ctx context.Context, languageCode string, now time.Time) (Pending, bool, error) {
+	pending, exists, err := store.Pending(ctx, languageCode)
+	return pending, exists && !pending.NextAttemptAt.After(now), err
+}
+func (store *Store) HasPending(ctx context.Context, languageCode string) (bool, error) {
+	var count int
+	err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_deliveries WHERE language_code=?`, languageCode).Scan(&count)
+	return count > 0, err
+}
+func (store *Store) ClaimSlot(ctx context.Context, languageCode string, slot time.Time) (bool, error) {
+	result, err := store.database.ExecContext(ctx, `INSERT INTO delivery_slots(language_code, slot_at) VALUES (?, ?) ON CONFLICT(language_code, slot_at) DO NOTHING`, languageCode, slot.UTC().Format(time.RFC3339))
+	if err != nil {
+		return false, fmt.Errorf("claim delivery slot: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	return changed == 1, err
+}
+func (store *Store) ClearCycle(ctx context.Context, languageCode string, contentType ContentType) error {
+	transaction, err := store.database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	cycle, err := currentCycle(ctx, transaction, languageCode, contentType)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.ExecContext(ctx, `DELETE FROM delivery_history WHERE language_code=? AND content_type=? AND cycle=?`, languageCode, contentType, cycle)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.ExecContext(ctx, `INSERT INTO delivery_cycles(language_code, content_type, cycle) VALUES (?, ?, ?) ON CONFLICT(language_code, content_type) DO UPDATE SET cycle=excluded.cycle`, languageCode, contentType, cycle+1)
+	if err != nil {
+		return err
+	}
+	return transaction.Commit()
+}
+func (store *Store) HistoryCount(ctx context.Context, languageCode string, contentType ContentType) (int, error) {
+	var count int
+	err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM delivery_history WHERE language_code=? AND content_type=?`, languageCode, contentType).Scan(&count)
+	return count, err
 }
 
-func (s *Store) migrate(ctx context.Context) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS sync_state (
-			source TEXT NOT NULL,
-			language_code TEXT NOT NULL,
-			edition_key TEXT NOT NULL,
-			status TEXT NOT NULL,
-			expected_count INTEGER NOT NULL DEFAULT 0,
-			imported_count INTEGER NOT NULL DEFAULT 0,
-			source_version TEXT NOT NULL DEFAULT '',
-			last_error TEXT NOT NULL DEFAULT '',
-			completed_at TEXT,
-			PRIMARY KEY(source, language_code, edition_key)
-		)`,
-		`CREATE TABLE IF NOT EXISTS quran_editions (
-			id INTEGER PRIMARY KEY,
-			language_code TEXT NOT NULL,
-			edition_key TEXT NOT NULL UNIQUE,
-			publisher TEXT NOT NULL,
-			attribution TEXT NOT NULL,
-			source_version TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS quran_verses (
-			edition_id INTEGER NOT NULL REFERENCES quran_editions(id),
-			surah_number INTEGER NOT NULL,
-			ayah_number INTEGER NOT NULL,
-			arabic_text TEXT NOT NULL,
-			text TEXT NOT NULL,
-			PRIMARY KEY(edition_id, surah_number, ayah_number)
-		)`,
-		`CREATE TABLE IF NOT EXISTS hadith_editions (
-			id INTEGER PRIMARY KEY,
-			language_code TEXT NOT NULL,
-			edition_key TEXT NOT NULL UNIQUE,
-			publisher TEXT NOT NULL,
-			attribution TEXT NOT NULL,
-			source_version TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS hadiths (
-			id INTEGER PRIMARY KEY,
-			edition_id INTEGER NOT NULL REFERENCES hadith_editions(id),
-			source_id TEXT NOT NULL,
-			collection_name TEXT NOT NULL,
-			reference TEXT NOT NULL,
-			text TEXT NOT NULL,
-			grade TEXT NOT NULL DEFAULT '',
-			explanation TEXT NOT NULL DEFAULT ''
-		)`,
-		`CREATE TABLE IF NOT EXISTS delivery_state (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS delivery_history (
-			content_type TEXT NOT NULL,
-			language_code TEXT NOT NULL,
-			content_id TEXT NOT NULL,
-			delivered_at TEXT NOT NULL,
-			PRIMARY KEY(content_type, language_code, content_id)
-		)`,
+func currentCycle(ctx context.Context, transaction *sql.Tx, languageCode string, contentType ContentType) (int, error) {
+	var cycle int
+	err := transaction.QueryRowContext(ctx, `SELECT cycle FROM delivery_cycles WHERE language_code=? AND content_type=?`, languageCode, contentType).Scan(&cycle)
+	if err == sql.ErrNoRows {
+		return 1, nil
 	}
+	if err != nil {
+		return 0, fmt.Errorf("read delivery cycle: %w", err)
+	}
+	return cycle, nil
+}
+func (store *Store) migrate(ctx context.Context) error {
+	if _, err := store.database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	var version string
+	err := store.database.QueryRowContext(ctx, `SELECT value FROM schema_meta WHERE key='schema_version'`).Scan(&version)
+	if err == sql.ErrNoRows {
+		for _, name := range []string{"sync_state", "quran_editions", "quran_verses", "hadith_editions", "hadiths", "delivery_state", "delivery_history"} {
+			if _, err := store.database.ExecContext(ctx, `DROP TABLE IF EXISTS `+name); err != nil {
+				return err
+			}
+		}
+		_, err = store.database.ExecContext(ctx, `INSERT INTO schema_meta(key,value) VALUES('schema_version',?)`, schemaVersion)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if version != schemaVersion {
+		return fmt.Errorf("unsupported schema version: %s", version)
+	}
+	statements := []string{`CREATE TABLE IF NOT EXISTS delivery_state(language_code TEXT PRIMARY KEY, next_content_type TEXT NOT NULL, last_successful_slot TEXT)`, `CREATE TABLE IF NOT EXISTS delivery_cycles(language_code TEXT NOT NULL, content_type TEXT NOT NULL, cycle INTEGER NOT NULL, PRIMARY KEY(language_code, content_type))`, `CREATE TABLE IF NOT EXISTS delivery_history(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, cycle INTEGER NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id, cycle))`, `CREATE TABLE IF NOT EXISTS delivery_reservations(language_code TEXT NOT NULL, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY(language_code, content_type, source, content_id))`, `CREATE TABLE IF NOT EXISTS pending_deliveries(language_code TEXT PRIMARY KEY, content_type TEXT NOT NULL, source TEXT NOT NULL, content_id TEXT NOT NULL, slot_at TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL)`, `CREATE TABLE IF NOT EXISTS delivery_slots(language_code TEXT NOT NULL, slot_at TEXT NOT NULL, PRIMARY KEY(language_code, slot_at))`}
 	for _, statement := range statements {
-		if _, err := s.database.ExecContext(ctx, statement); err != nil {
+		if _, err := store.database.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate database: %w", err)
 		}
 	}
