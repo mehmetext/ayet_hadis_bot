@@ -15,15 +15,17 @@ go run ./cmd/ayet-hadis-bot run  # Zaman penceresinde çalışır.
 
 ## Ayarlar
 
-```env
-TIMEZONE=Europe/Istanbul
-SEND_WINDOW_START=06:30
-SEND_WINDOW_END=22:30
-DAILY_NOTIFICATION_COUNT=4
-DATA_DIR=data
+Tüm çalışma ayarlarının tek kaynağı proje kökündeki `.env` dosyasıdır. Bir kez oluştur:
+
+```sh
+cp .env.example .env
 ```
 
-Docker Compose, `DATA_DIR` için kalıcı `bot-data` volume'unu `/data` altında bağlar:
+Ardından saat aralığı ve bildirim sayısını yalnız `.env` içinde değiştir. Uygulama lokal çalışırken bu dosyayı kendisi okur; Docker Compose da aynı dosyayı konteynere verir. Eksik bir değer varsa uygulama hangi değerin eksik olduğunu söyleyerek başlatmayı durdurur.
+
+`CONSOLE_LANGUAGE` konsol akışının dilini (`ara`, `eng`, `tur` veya `deu`) belirler. Telegram kullanıcı tercihleri eklenene kadar gönderimler bu tek dil için yapılır.
+
+`DATA_DIR=data` hem lokal kullanımda proje içindeki `data/bot.db` yolunu, hem Docker içinde kalıcı `bot-data` volume'unu ifade eder. Bu değeri normalde değiştirmen gerekmez.
 
 ```sh
 docker compose up -d --build

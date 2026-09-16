@@ -2,14 +2,10 @@ services:
   ayet-hadis-bot:
     build: .
     restart: unless-stopped
-    environment:
-      TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
-      SEND_WINDOW_START: ${SEND_WINDOW_START:-06:30}
-      SEND_WINDOW_END: ${SEND_WINDOW_END:-22:30}
-      DAILY_NOTIFICATION_COUNT: ${DAILY_NOTIFICATION_COUNT:-4}
-      DATA_DIR: /data
+    env_file:
+      - .env
     volumes:
-      - bot-data:/data
+      - bot-data:/app/data
 
 volumes:
   bot-data:

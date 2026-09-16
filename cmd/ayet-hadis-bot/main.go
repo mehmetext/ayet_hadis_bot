@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"math/rand"
+
 	"github.com/example/ayet-hadis-bot/internal/config"
 	"github.com/example/ayet-hadis-bot/internal/delivery"
 	"github.com/example/ayet-hadis-bot/internal/schedule"
@@ -17,10 +19,7 @@ import (
 	"github.com/example/ayet-hadis-bot/internal/source/hadeethenc"
 	"github.com/example/ayet-hadis-bot/internal/source/quranenc"
 	"github.com/example/ayet-hadis-bot/internal/store"
-	"math/rand"
 )
-
-const defaultLanguage = "tur"
 
 func main() {
 	logger := log.New(os.Stderr, "ayet-hadis-bot: ", log.LstdFlags)
@@ -46,7 +45,7 @@ func main() {
 	defer stop()
 	switch mode {
 	case "once":
-		if err := service.Attempt(ctx, defaultLanguage, time.Now(), time.Now()); err != nil {
+		if err := service.Attempt(ctx, configuration.ConsoleLanguage, time.Now(), time.Now()); err != nil {
 			logger.Printf("delivery: %v", err)
 		}
 	case "run":
@@ -67,11 +66,11 @@ func runSchedule(ctx context.Context, configuration config.Config, database *sto
 		}
 		now := time.Now().In(location)
 		if inWindow(now, configuration, location) {
-			pending, err := database.HasPending(ctx, defaultLanguage)
+			pending, err := database.HasPending(ctx, configuration.ConsoleLanguage)
 			if err != nil {
 				logger.Printf("read pending delivery: %v", err)
 			} else if pending {
-				if err := service.Attempt(ctx, defaultLanguage, now, now); err != nil {
+				if err := service.Attempt(ctx, configuration.ConsoleLanguage, now, now); err != nil {
 					logger.Printf("pending delivery: %v", err)
 				}
 			} else {
@@ -84,13 +83,13 @@ func runSchedule(ctx context.Context, configuration config.Config, database *sto
 					if now.Before(slot) || now.Sub(slot) > 15*time.Second {
 						continue
 					}
-					claimed, err := database.ClaimSlot(ctx, defaultLanguage, slot)
+					claimed, err := database.ClaimSlot(ctx, configuration.ConsoleLanguage, slot)
 					if err != nil {
 						logger.Printf("claim slot: %v", err)
 						continue
 					}
 					if claimed {
-						if err := service.Attempt(ctx, defaultLanguage, slot, now); err != nil {
+						if err := service.Attempt(ctx, configuration.ConsoleLanguage, slot, now); err != nil {
 							logger.Printf("delivery: %v", err)
 						}
 					}

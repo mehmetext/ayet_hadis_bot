@@ -1,23 +1,18 @@
 package config
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
-const (
-	defaultTimezone               = "Europe/Istanbul"
-	defaultWindowStart            = "06:30"
-	defaultWindowEnd              = "22:30"
-	defaultDailyNotificationCount = 4
-	defaultDataDirectory          = "data"
-	defaultHTTPTimeout            = 30 * time.Second
-)
-
 type Config struct {
+	ConsoleLanguage        string
 	Timezone               string
 	SendWindowStart        string
 	SendWindowEnd          string
@@ -31,24 +26,51 @@ func (configuration Config) DatabasePath() string {
 }
 
 func Load() (Config, error) {
-	count, err := positiveInteger("DAILY_NOTIFICATION_COUNT", defaultDailyNotificationCount)
+	if err := loadEnvironmentFile(".env"); err != nil {
+		return Config{}, err
+	}
+
+	timezone, err := requiredEnvironmentValue("TIMEZONE")
 	if err != nil {
 		return Config{}, err
 	}
-	timezone := envOrDefault("TIMEZONE", defaultTimezone)
+	start, err := requiredEnvironmentValue("SEND_WINDOW_START")
+	if err != nil {
+		return Config{}, err
+	}
+	end, err := requiredEnvironmentValue("SEND_WINDOW_END")
+	if err != nil {
+		return Config{}, err
+	}
+	dataDirectory, err := requiredEnvironmentValue("DATA_DIR")
+	if err != nil {
+		return Config{}, err
+	}
+	consoleLanguage, err := requiredEnvironmentValue("CONSOLE_LANGUAGE")
+	if err != nil {
+		return Config{}, err
+	}
+	count, err := positiveInteger("DAILY_NOTIFICATION_COUNT")
+	if err != nil {
+		return Config{}, err
+	}
+	timeoutSeconds, err := positiveInteger("HTTP_TIMEOUT_SECONDS")
+	if err != nil {
+		return Config{}, err
+	}
 	if _, err := time.LoadLocation(timezone); err != nil {
 		return Config{}, fmt.Errorf("TIMEZONE must be a valid IANA time zone: %q", timezone)
 	}
-	start, end := envOrDefault("SEND_WINDOW_START", defaultWindowStart), envOrDefault("SEND_WINDOW_END", defaultWindowEnd)
 	if !validClock(start) || !validClock(end) || start >= end {
 		return Config{}, fmt.Errorf("SEND_WINDOW_START and SEND_WINDOW_END must be valid ordered HH:MM times")
 	}
-	return Config{Timezone: timezone, SendWindowStart: start, SendWindowEnd: end, DailyNotificationCount: count, DataDirectory: envOrDefault("DATA_DIR", defaultDataDirectory), HTTPTimeout: defaultHTTPTimeout}, nil
+	return Config{ConsoleLanguage: consoleLanguage, Timezone: timezone, SendWindowStart: start, SendWindowEnd: end, DailyNotificationCount: count, DataDirectory: dataDirectory, HTTPTimeout: time.Duration(timeoutSeconds) * time.Second}, nil
 }
-func positiveInteger(name string, fallback int) (int, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
+
+func positiveInteger(name string) (int, error) {
+	value, err := requiredEnvironmentValue(name)
+	if err != nil {
+		return 0, err
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
@@ -56,10 +78,47 @@ func positiveInteger(name string, fallback int) (int, error) {
 	}
 	return parsed, nil
 }
+
 func validClock(value string) bool { _, err := time.Parse("15:04", value); return err == nil }
-func envOrDefault(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
+
+func requiredEnvironmentValue(name string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return "", fmt.Errorf("%s is required; copy .env.example to .env and set a value", name)
 	}
-	return fallback
+	return value, nil
+}
+
+func loadEnvironmentFile(path string) error {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for lineNumber := 1; scanner.Scan(); lineNumber++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, found := strings.Cut(line, "=")
+		name = strings.TrimSpace(strings.TrimPrefix(name, "export "))
+		if !found || name == "" {
+			return fmt.Errorf("invalid .env entry on line %d", lineNumber)
+		}
+		if _, exists := os.LookupEnv(name); exists {
+			continue
+		}
+		if err := os.Setenv(name, strings.Trim(strings.TrimSpace(value), "\"'")); err != nil {
+			return fmt.Errorf("set %s from .env: %w", name, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return nil
 }
