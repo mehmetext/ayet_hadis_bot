@@ -53,15 +53,45 @@ func (instance *Bot) Broadcast(ctx context.Context, languageCode, message string
 		return err
 	}
 	for _, userID := range users {
-		if err := instance.sendMessage(ctx, userID, message); err != nil {
+		chunks := splitMessage(message, 4096)
+		if err := instance.sendChunks(ctx, userID, chunks); err != nil {
 			instance.logger.Printf("Telegram delivery user=%d language=%s: %v", userID, languageCode, err)
 		}
 	}
 	return nil
 }
 
+func (instance *Bot) sendChunks(ctx context.Context, userID int64, chunks []string) error {
+	for _, chunk := range chunks {
+		if err := instance.sendMessage(ctx, userID, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitMessage(message string, limit int) []string {
+	runes := []rune(message)
+	var chunks []string
+	for len(runes) > limit {
+		cut := limit
+		for index := limit; index > 0; index-- {
+			if runes[index-1] == '\n' || runes[index-1] == ' ' {
+				cut = index
+				break
+			}
+		}
+		chunks = append(chunks, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+	return chunks
+}
+
 func (instance *Bot) sendMessage(ctx context.Context, userID int64, message string) error {
-	params := &bot.SendMessageParams{ChatID: userID, Text: message}
+	params := &bot.SendMessageParams{ChatID: userID, Text: message, ParseMode: models.ParseModeHTML}
 	if _, err := instance.client.SendMessage(ctx, params); err == nil {
 		return nil
 	} else {

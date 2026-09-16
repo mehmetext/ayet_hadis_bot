@@ -11,3 +11,13 @@ func TestVerseCoordinateCoversQuran(t *testing.T) {
 		t.Fatal("out-of-range coordinate is valid")
 	}
 }
+
+func TestSurahName(t *testing.T) {
+	name, ok := SurahName(34)
+	if !ok || name != "Sebe" {
+		t.Fatalf("SurahName(34) = %q, %v", name, ok)
+	}
+	if _, ok := SurahName(115); ok {
+		t.Fatal("SurahName(115) should be invalid")
+	}
+}

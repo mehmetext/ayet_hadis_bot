@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"strings"
 	"time"
@@ -114,13 +115,17 @@ func (service Service) deliverVerse(ctx context.Context, language catalog.Langua
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
-	message := ""
+	surahName, _ := catalog.SurahName(verse.SurahNumber)
+	consoleMessage := ""
+	telegramMessage := ""
 	if language.Code == "ara" {
-		message = fmt.Sprintf("AYET — %d:%d\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, language.Attribution)
+		consoleMessage = fmt.Sprintf("📖 AYET\n\n%s Suresi — %d:%d\n\n%s\n\nKaynak: %s\n", surahName, verse.SurahNumber, verse.AyahNumber, verse.ArabicText, language.Attribution)
+		telegramMessage = fmt.Sprintf("<b>📖 AYET</b>\n\n<b>%s Suresi — %d:%d</b>\n\n%s\n\nKaynak: %s\n", html.EscapeString(surahName), verse.SurahNumber, verse.AyahNumber, html.EscapeString(verse.ArabicText), html.EscapeString(language.Attribution))
 	} else {
-		message = fmt.Sprintf("AYET — %d:%d\n%s\n%s\nKaynak: %s\n", verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Translation, language.Attribution)
+		consoleMessage = fmt.Sprintf("📖 AYET\n\n%s Suresi — %d:%d\n\n%s\n\nDil çevirisi:\n%s\n\nKaynak: %s\n", surahName, verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Translation, language.Attribution)
+		telegramMessage = fmt.Sprintf("<b>📖 AYET</b>\n\n<b>%s Suresi — %d:%d</b>\n\n%s\n\n<b>Dil çevirisi:</b>\n%s\n\nKaynak: %s\n", html.EscapeString(surahName), verse.SurahNumber, verse.AyahNumber, html.EscapeString(verse.ArabicText), html.EscapeString(verse.Translation), html.EscapeString(language.Attribution))
 	}
-	err = service.write(ctx, language.Code, message)
+	err = service.write(ctx, language.Code, telegramMessage, consoleMessage)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
@@ -135,22 +140,23 @@ func (service Service) deliverHadith(ctx context.Context, language catalog.Langu
 	if reference == "" {
 		reference = hadith.Attribution
 	}
-	message := fmt.Sprintf("HADİS — %s\n%s\nDerece: %s\nAçıklama: %s\nKaynak: %s\n", reference, hadith.Hadeeth, hadith.Grade, hadith.Explanation, language.Attribution)
-	err = service.write(ctx, language.Code, message)
+	consoleMessage := fmt.Sprintf("📜 HADİS\n\nReferans: %s\n\n%s\n\nDerece: %s\n\nAçıklama:\n%s\n\nKaynak: %s\n", reference, hadith.Hadeeth, hadith.Grade, hadith.Explanation, language.Attribution)
+	telegramMessage := fmt.Sprintf("<b>📜 HADİS</b>\n\n<b>Referans:</b> %s\n\n%s\n\n<b>Derece:</b> %s\n\n<b>Açıklama:</b>\n%s\n\nKaynak: %s\n", html.EscapeString(reference), html.EscapeString(hadith.Hadeeth), html.EscapeString(hadith.Grade), html.EscapeString(hadith.Explanation), html.EscapeString(language.Attribution))
+	err = service.write(ctx, language.Code, telegramMessage, consoleMessage)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
 	return service.Store.Complete(ctx, candidate, slot)
 }
 
-func (service Service) write(ctx context.Context, languageCode, message string) error {
+func (service Service) write(ctx context.Context, languageCode, telegramMessage, consoleMessage string) error {
 	if service.Broadcaster != nil {
-		return service.Broadcaster(ctx, languageCode, message)
+		return service.Broadcaster(ctx, languageCode, telegramMessage)
 	}
 	if service.Writer == nil {
 		return fmt.Errorf("delivery output is not configured")
 	}
-	_, err := io.WriteString(service.Writer, message)
+	_, err := io.WriteString(service.Writer, consoleMessage)
 	return err
 }
 func (service Service) failed(ctx context.Context, candidate store.Candidate, slot time.Time, attempts int, now time.Time, cause error) error {
