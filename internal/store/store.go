@@ -162,10 +162,6 @@ func (store *Store) Pending(ctx context.Context, languageCode string) (Pending, 
 	pending.NextAttemptAt, _ = time.Parse(time.RFC3339, next)
 	return pending, true, nil
 }
-func (store *Store) PendingDue(ctx context.Context, languageCode string, now time.Time) (Pending, bool, error) {
-	pending, exists, err := store.Pending(ctx, languageCode)
-	return pending, exists && !pending.NextAttemptAt.After(now), err
-}
 func (store *Store) HasPending(ctx context.Context, languageCode string) (bool, error) {
 	var count int
 	err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_deliveries WHERE language_code=?`, languageCode).Scan(&count)

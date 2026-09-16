@@ -37,13 +37,13 @@ func (selector Selector) HadithCandidate(ctx context.Context, languageCode, hadi
 		return store.Candidate{}, fmt.Errorf("no HadeethEnc categories for %s", hadithLanguage)
 	}
 	category := categories[selector.Random.Intn(len(categories))]
-	listings, lastPage, _, err := selector.Hadith.List(ctx, hadithLanguage, category.ID, 1, hadithPageSize)
+	listings, lastPage, err := selector.Hadith.List(ctx, hadithLanguage, category.ID, 1, hadithPageSize)
 	if err != nil {
 		return store.Candidate{}, err
 	}
 	if lastPage > 1 {
 		page := selector.Random.Intn(lastPage) + 1
-		listings, _, _, err = selector.Hadith.List(ctx, hadithLanguage, category.ID, page, hadithPageSize)
+		listings, _, err = selector.Hadith.List(ctx, hadithLanguage, category.ID, page, hadithPageSize)
 		if err != nil {
 			return store.Candidate{}, err
 		}
@@ -62,7 +62,7 @@ func (selector Selector) AllHadithCandidates(ctx context.Context, languageCode, 
 	seen := make(map[string]struct{})
 	for _, category := range categories {
 		for page := 1; ; page++ {
-			listings, lastPage, _, err := selector.Hadith.List(ctx, hadithLanguage, category.ID, page, hadithPageSize)
+			listings, lastPage, err := selector.Hadith.List(ctx, hadithLanguage, category.ID, page, hadithPageSize)
 			if err != nil {
 				return nil, err
 			}

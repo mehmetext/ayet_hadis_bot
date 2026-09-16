@@ -110,14 +110,3 @@ func inWindow(now time.Time, configuration config.Config, location *time.Locatio
 	slots, err := schedule.Slots(now, configuration.SendWindowStart, configuration.SendWindowEnd, 2, location)
 	return err == nil && !now.Before(slots[0]) && !now.After(slots[1])
 }
-
-func waitFor(ctx context.Context, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
