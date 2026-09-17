@@ -53,7 +53,7 @@ func main() {
 		if configuration.TelegramBotToken == "" {
 			logger.Fatal("TELEGRAM_BOT_TOKEN is required for run")
 		}
-		telegramBot, err := telegram.New(configuration.TelegramBotToken, database, logger)
+		telegramBot, err := telegram.New(configuration.TelegramBotToken, database, logger, telegram.WelcomeSettings{Start: configuration.SendWindowStart, End: configuration.SendWindowEnd, DailyCount: configuration.DailyNotificationCount})
 		if err != nil {
 			logger.Fatal(err)
 		}

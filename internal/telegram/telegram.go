@@ -21,14 +21,21 @@ type UserStore interface {
 	SubscribedTelegramUsers(context.Context, string) ([]int64, error)
 }
 
-type Bot struct {
-	client *bot.Bot
-	store  UserStore
-	logger *log.Logger
+type WelcomeSettings struct {
+	Start      string
+	End        string
+	DailyCount int
 }
 
-func New(token string, userStore UserStore, logger *log.Logger) (*Bot, error) {
-	instance := &Bot{store: userStore, logger: logger}
+type Bot struct {
+	client  *bot.Bot
+	store   UserStore
+	logger  *log.Logger
+	welcome WelcomeSettings
+}
+
+func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeSettings) (*Bot, error) {
+	instance := &Bot{store: userStore, logger: logger, welcome: welcome}
 	client, err := bot.New(token,
 		bot.WithMessageTextHandler("/start", bot.MatchTypePrefix, instance.start),
 		bot.WithMessageTextHandler("/stop", bot.MatchTypeExact, instance.stop),
@@ -113,7 +120,11 @@ func (instance *Bot) start(ctx context.Context, client *bot.Bot, update *models.
 	if update.Message == nil {
 		return
 	}
-	instance.sendLanguagePicker(ctx, client, update.Message.Chat.ID, "Dilini seç; seçimden sonra bildirimler başlayacak.")
+	instance.sendLanguagePicker(ctx, client, update.Message.Chat.ID, welcomeMessage(instance.welcome))
+}
+
+func welcomeMessage(settings WelcomeSettings) string {
+	return fmt.Sprintf("Ayet & Hadis Botu'na hoş geldin.\n\nBu bot, QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri anlık olarak paylaşır. \n\nHer gün %s–%s arasında %d bildirim göndeririz. Bildirimler ayet ve hadis sırayla olacak şekilde ilerler.\n\nBaşlamak için bildirim dilini seç:", settings.Start, settings.End, settings.DailyCount)
 }
 
 func (instance *Bot) language(ctx context.Context, client *bot.Bot, update *models.Update) {
