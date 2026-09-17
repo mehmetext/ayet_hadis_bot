@@ -14,11 +14,17 @@ import (
 	"github.com/mehmetext/ayet-hadis-bot/internal/store"
 )
 
+var errTelegramUserNotRegistered = errors.New("Telegram user is not registered")
+
 type UserStore interface {
 	SaveTelegramUser(context.Context, int64, string) error
 	UnsubscribeTelegramUser(context.Context, int64) error
 	TelegramUser(context.Context, int64) (store.TelegramUser, bool, error)
 	SubscribedTelegramUsers(context.Context, string) ([]int64, error)
+}
+
+type SampleProvider interface {
+	Sample(context.Context, string) (string, error)
 }
 
 type WelcomeSettings struct {
@@ -30,12 +36,13 @@ type WelcomeSettings struct {
 type Bot struct {
 	client  *bot.Bot
 	store   UserStore
+	sampler SampleProvider
 	logger  *log.Logger
 	welcome WelcomeSettings
 }
 
-func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeSettings) (*Bot, error) {
-	instance := &Bot{store: userStore, logger: logger, welcome: welcome}
+func New(token string, userStore UserStore, sampler SampleProvider, logger *log.Logger, welcome WelcomeSettings) (*Bot, error) {
+	instance := &Bot{store: userStore, sampler: sampler, logger: logger, welcome: welcome}
 	client, err := bot.New(token,
 		bot.WithAllowedUpdates(allowedUpdates()),
 		bot.WithErrorsHandler(func(err error) {
@@ -45,6 +52,7 @@ func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeS
 		bot.WithMessageTextHandler("/stop", bot.MatchTypeExact, instance.stop),
 		bot.WithMessageTextHandler("/language", bot.MatchTypeExact, instance.language),
 		bot.WithMessageTextHandler("/status", bot.MatchTypeExact, instance.status),
+		bot.WithMessageTextHandler("/sample", bot.MatchTypeExact, instance.sample),
 		bot.WithMessageTextHandler("/help", bot.MatchTypeExact, instance.help),
 		bot.WithCallbackQueryDataHandler("language:", bot.MatchTypePrefix, instance.selectLanguage),
 	)
@@ -158,7 +166,7 @@ func isStartCommand(text string) bool {
 }
 
 func welcomeMessage(settings WelcomeSettings) string {
-	return fmt.Sprintf("Ayet & Hadis Botu'na hoş geldin.\n\nBu bot, QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri anlık olarak paylaşır.\n\nHer gün %s–%s arasında %d bildirim göndeririz. Bildirimler ayet ve hadis sırayla olacak şekilde ilerler.\n\nKomutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/help — Bu yardım mesajını göster\n\nBaşlamak için bildirim dilini seç:", settings.Start, settings.End, settings.DailyCount)
+	return fmt.Sprintf("Ayet & Hadis Botu'na hoş geldin.\n\nBu bot, QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri anlık olarak paylaşır.\n\nHer gün %s–%s arasında %d bildirim göndeririz. Bildirimler ayet ve hadis sırayla olacak şekilde ilerler.\n\nKomutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/sample — Rastgele ayet veya hadis al\n/help — Bu yardım mesajını göster\n\nBaşlamak için bildirim dilini seç:", settings.Start, settings.End, settings.DailyCount)
 }
 
 func (instance *Bot) help(ctx context.Context, client *bot.Bot, update *models.Update) {
@@ -172,7 +180,7 @@ func (instance *Bot) help(ctx context.Context, client *bot.Bot, update *models.U
 }
 
 func helpMessage() string {
-	return "Komutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/help — Bu yardım mesajını göster"
+	return "Komutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/sample — Rastgele ayet veya hadis al\n/help — Bu yardım mesajını göster"
 }
 
 func (instance *Bot) language(ctx context.Context, client *bot.Bot, update *models.Update) {

@@ -3,13 +3,12 @@ package delivery
 import (
 	"context"
 	"fmt"
-	"html"
 	"io"
+	"math/rand"
 	"strings"
 	"time"
 
 	"github.com/mehmetext/ayet-hadis-bot/internal/catalog"
-	"github.com/mehmetext/ayet-hadis-bot/internal/selection"
 	"github.com/mehmetext/ayet-hadis-bot/internal/source/hadeethenc"
 	"github.com/mehmetext/ayet-hadis-bot/internal/source/quranenc"
 	"github.com/mehmetext/ayet-hadis-bot/internal/store"
@@ -17,14 +16,61 @@ import (
 
 const reservationDuration = 24 * time.Hour
 const candidateAttempts = 100
+const sampleContentTypeCount = 2
 
 type Service struct {
 	Store       *store.Store
-	Selector    selection.Selector
-	Quran       quranenc.Client
-	Hadith      hadeethenc.Client
+	Selector    CandidateSelector
+	Random      *rand.Rand
+	Quran       QuranClient
+	Hadith      HadithClient
 	Writer      io.Writer
 	Broadcaster func(context.Context, string, string) error
+}
+
+type CandidateSelector interface {
+	QuranCandidate(string) (store.Candidate, error)
+	HadithCandidate(context.Context, string, string) (store.Candidate, error)
+	AllHadithCandidates(context.Context, string, string) ([]store.Candidate, error)
+}
+
+type QuranClient interface {
+	FetchAyah(context.Context, string, int, int) (quranenc.Verse, error)
+}
+
+type HadithClient interface {
+	One(context.Context, string, string) (hadeethenc.Hadith, error)
+}
+
+func (service Service) Sample(ctx context.Context, languageCode string) (string, error) {
+	language, found := catalog.Find(languageCode)
+	if !found {
+		return "", fmt.Errorf("unsupported language: %s", languageCode)
+	}
+	contentType := store.ContentTypeVerse
+	if service.Random.Intn(sampleContentTypeCount) == 1 {
+		contentType = store.ContentTypeHadith
+	}
+	candidate, err := service.candidate(ctx, language, contentType)
+	if err != nil {
+		return "", err
+	}
+	if candidate.Type == store.ContentTypeVerse {
+		var surah, ayah int
+		if _, err := fmt.Sscanf(candidate.ID, "%d:%d", &surah, &ayah); err != nil {
+			return "", err
+		}
+		verse, err := service.Quran.FetchAyah(ctx, language.QuranTranslationKey, surah, ayah)
+		if err != nil {
+			return "", err
+		}
+		return formatVerse(language, verse).Telegram, nil
+	}
+	hadith, err := service.Hadith.One(ctx, language.HadithLanguageKey, candidate.ID)
+	if err != nil {
+		return "", err
+	}
+	return formatHadith(language, hadith).Telegram, nil
 }
 
 func (service Service) Attempt(ctx context.Context, languageCode string, slot, now time.Time) error {
@@ -115,16 +161,9 @@ func (service Service) deliverVerse(ctx context.Context, language catalog.Langua
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
-	surahName, _ := catalog.SurahName(verse.SurahNumber)
-	consoleMessage := ""
-	telegramMessage := ""
-	if language.Code == "ara" {
-		consoleMessage = fmt.Sprintf("📖 AYET\n\n%s Suresi — %d:%d\n\n%s\n\nKaynak: %s\n", surahName, verse.SurahNumber, verse.AyahNumber, verse.ArabicText, language.Attribution)
-		telegramMessage = fmt.Sprintf("<b>📖 AYET</b>\n\n<b>%s Suresi — %d:%d</b>\n\n%s\n\nKaynak: %s\n", html.EscapeString(surahName), verse.SurahNumber, verse.AyahNumber, html.EscapeString(verse.ArabicText), html.EscapeString(language.Attribution))
-	} else {
-		consoleMessage = fmt.Sprintf("📖 AYET\n\n%s Suresi — %d:%d\n\n%s\n\nDil çevirisi:\n%s\n\nKaynak: %s\n", surahName, verse.SurahNumber, verse.AyahNumber, verse.ArabicText, verse.Translation, language.Attribution)
-		telegramMessage = fmt.Sprintf("<b>📖 AYET</b>\n\n<b>%s Suresi — %d:%d</b>\n\n%s\n\n<b>Dil çevirisi:</b>\n%s\n\nKaynak: %s\n", html.EscapeString(surahName), verse.SurahNumber, verse.AyahNumber, html.EscapeString(verse.ArabicText), html.EscapeString(verse.Translation), html.EscapeString(language.Attribution))
-	}
+	formatted := formatVerse(language, verse)
+	consoleMessage := formatted.Console
+	telegramMessage := formatted.Telegram
 	err = service.write(ctx, language.Code, telegramMessage, consoleMessage)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
@@ -136,12 +175,9 @@ func (service Service) deliverHadith(ctx context.Context, language catalog.Langu
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)
 	}
-	reference := hadith.Reference
-	if reference == "" {
-		reference = hadith.Attribution
-	}
-	consoleMessage := fmt.Sprintf("📜 HADİS\n\nReferans: %s\n\n%s\n\nDerece: %s\n\nAçıklama:\n%s\n\nKaynak: %s\n", reference, hadith.Hadeeth, hadith.Grade, hadith.Explanation, language.Attribution)
-	telegramMessage := fmt.Sprintf("<b>📜 HADİS</b>\n\n<b>Referans:</b> %s\n\n%s\n\n<b>Derece:</b> %s\n\n<b>Açıklama:</b>\n%s\n\nKaynak: %s\n", html.EscapeString(reference), html.EscapeString(hadith.Hadeeth), html.EscapeString(hadith.Grade), html.EscapeString(hadith.Explanation), html.EscapeString(language.Attribution))
+	formatted := formatHadith(language, hadith)
+	consoleMessage := formatted.Console
+	telegramMessage := formatted.Telegram
 	err = service.write(ctx, language.Code, telegramMessage, consoleMessage)
 	if err != nil {
 		return service.failed(ctx, candidate, slot, attempts, now, err)

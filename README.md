@@ -23,6 +23,7 @@ Telegram bot: [@hadis_ayet_bot](https://t.me/hadis_ayet_bot)
 /stop      Stop notifications
 /language  Change the notification language
 /status    Show language and subscription status
+/sample    Get a random verse or hadith
 /help      Show the command list
 ```
 

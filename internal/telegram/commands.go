@@ -10,6 +10,7 @@ func commandDefinitions() []models.BotCommand {
 		{Command: "stop", Description: "Bildirimleri durdur"},
 		{Command: "language", Description: "Bildirim dilini değiştir"},
 		{Command: "status", Description: "Abonelik durumunu gör"},
+		{Command: "sample", Description: "Rastgele ayet veya hadis al"},
 		{Command: "help", Description: "Kullanılabilir komutları göster"},
 	}
 }

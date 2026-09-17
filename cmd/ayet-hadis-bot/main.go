@@ -37,7 +37,8 @@ func main() {
 	}
 	defer database.Close()
 	client := &http.Client{Timeout: configuration.HTTPTimeout}
-	service := delivery.Service{Store: database, Selector: selection.Selector{Random: rand.New(rand.NewSource(time.Now().UnixNano())), Hadith: hadeethenc.Client{HTTPClient: client}}, Quran: quranenc.Client{HTTPClient: client}, Hadith: hadeethenc.Client{HTTPClient: client}, Writer: os.Stdout}
+	randomSource := rand.New(rand.NewSource(time.Now().UnixNano()))
+	service := delivery.Service{Store: database, Selector: selection.Selector{Random: randomSource, Hadith: hadeethenc.Client{HTTPClient: client}}, Random: randomSource, Quran: quranenc.Client{HTTPClient: client}, Hadith: hadeethenc.Client{HTTPClient: client}, Writer: os.Stdout}
 	mode := "run"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
@@ -53,7 +54,7 @@ func main() {
 		if configuration.TelegramBotToken == "" {
 			logger.Fatal("TELEGRAM_BOT_TOKEN is required for run")
 		}
-		telegramBot, err := telegram.New(configuration.TelegramBotToken, database, logger, telegram.WelcomeSettings{Start: configuration.SendWindowStart, End: configuration.SendWindowEnd, DailyCount: configuration.DailyNotificationCount})
+		telegramBot, err := telegram.New(configuration.TelegramBotToken, database, service, logger, telegram.WelcomeSettings{Start: configuration.SendWindowStart, End: configuration.SendWindowEnd, DailyCount: configuration.DailyNotificationCount})
 		if err != nil {
 			logger.Fatal(err)
 		}

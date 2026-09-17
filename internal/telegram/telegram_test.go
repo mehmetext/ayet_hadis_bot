@@ -10,7 +10,7 @@ import (
 
 func TestWelcomeMessageIncludesScheduleAndSequence(t *testing.T) {
 	message := welcomeMessage(WelcomeSettings{Start: "06:30", End: "22:30", DailyCount: 4})
-	for _, expected := range []string{"Ayet & Hadis Botu", "06:30", "22:30", "4 bildirim", "ayet ve hadis sırayla", "/start", "/stop", "/language", "/status", "/help"} {
+	for _, expected := range []string{"Ayet & Hadis Botu", "06:30", "22:30", "4 bildirim", "ayet ve hadis sırayla", "/start", "/stop", "/language", "/status", "/sample", "/help"} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("welcome message missing %q: %s", expected, message)
 		}
@@ -42,6 +42,7 @@ func TestCommandDefinitionsExposeSupportedCommands(t *testing.T) {
 		"stop":     "Bildirimleri durdur",
 		"language": "Bildirim dilini değiştir",
 		"status":   "Abonelik durumunu gör",
+		"sample":   "Rastgele ayet veya hadis al",
 		"help":     "Kullanılabilir komutları göster",
 	}
 
