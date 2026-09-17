@@ -65,11 +65,39 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TIMEZONE: ${{ vars.TIMEZONE }}
+          CONSOLE_LANGUAGE: ${{ vars.CONSOLE_LANGUAGE }}
+          SEND_WINDOW_START: ${{ vars.SEND_WINDOW_START }}
+          SEND_WINDOW_END: ${{ vars.SEND_WINDOW_END }}
+          DAILY_NOTIFICATION_COUNT: ${{ vars.DAILY_NOTIFICATION_COUNT }}
+          HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS }}
+          DATA_DIR: ${{ vars.DATA_DIR }}
         run: |
           set -eu
+          test -n "$TELEGRAM_BOT_TOKEN"
+          test -n "$TIMEZONE"
+          test -n "$CONSOLE_LANGUAGE"
+          test -n "$SEND_WINDOW_START"
+          test -n "$SEND_WINDOW_END"
+          test -n "$DAILY_NOTIFICATION_COUNT"
+          test -n "$HTTP_TIMEOUT_SECONDS"
+          test -n "$DATA_DIR"
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
           ssh-keyscan -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          ssh -i "$HOME/.ssh/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          scp -i "$HOME/.ssh/deploy_key" docker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
+          {
+            printf 'TIMEZONE=%s\n' "$TIMEZONE"
+            printf 'CONSOLE_LANGUAGE=%s\n' "$CONSOLE_LANGUAGE"
+            printf 'SEND_WINDOW_START=%s\n' "$SEND_WINDOW_START"
+            printf 'SEND_WINDOW_END=%s\n' "$SEND_WINDOW_END"
+            printf 'DAILY_NOTIFICATION_COUNT=%s\n' "$DAILY_NOTIFICATION_COUNT"
+            printf 'HTTP_TIMEOUT_SECONDS=%s\n' "$HTTP_TIMEOUT_SECONDS"
+            printf 'DATA_DIR=%s\n' "$DATA_DIR"
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
+          } | ssh -i "$HOME/.ssh/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" "umask 077; cat > '$DEPLOY_PATH/.env.tmp' && mv '$DEPLOY_PATH/.env.tmp' '$DEPLOY_PATH/.env'"
           printf '%s' "$GHCR_TOKEN" | ssh -i "$HOME/.ssh/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
           ssh -i "$HOME/.ssh/deploy_key" "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && docker compose pull && docker compose up -d --remove-orphans"

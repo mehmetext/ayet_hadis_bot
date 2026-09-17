@@ -45,7 +45,9 @@ docker compose run --rm ayet-hadis-bot once
 
 `main` branch'ine yapılan her commit, GitHub Actions tarafından test edilip Docker image olarak GHCR'a gönderilir. Pipeline daha sonra SSH ile sunucuya bağlanır, yalnız bu projenin klasöründe `docker compose pull` ve `docker compose up -d` çalıştırır. Sunucuda Docker build yapılmaz ve başka projelerin image'ları temizlenmez.
 
-Sunucuda proje klasöründe bir kez `.env` oluşturup token ve diğer ayarları doldur. GitHub repository ayarlarında şu Actions secret'larını tanımla: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `GHCR_USERNAME`, `GHCR_TOKEN`. `GHCR_TOKEN` yalnız `read:packages` yetkisine sahip bir classic PAT olmalı.
+Sunucuda yalnızca boş bir deployment klasörü oluştur; repository’yi sunucuda clone etmene veya `.env` dosyasını elle yazmana gerek yok. Pipeline her deploy’da güncel `docker-compose.yml` dosyasını ve GitHub’daki ayarlardan üretilen `.env` dosyasını SCP/SSH ile gönderir. GitHub repository ayarlarında şu Actions secret'larını tanımla: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `GHCR_USERNAME`, `GHCR_TOKEN`, `TELEGRAM_BOT_TOKEN`. `GHCR_TOKEN` yalnız `read:packages` yetkisine sahip bir classic PAT olmalı.
+
+GitHub Actions Variables olarak şu çalışma ayarlarını ekle: `TIMEZONE`, `CONSOLE_LANGUAGE`, `SEND_WINDOW_START`, `SEND_WINDOW_END`, `DAILY_NOTIFICATION_COUNT`, `HTTP_TIMEOUT_SECONDS`, `DATA_DIR`. Pipeline bu değerlerden sunucuda izinleri `0600` olan `.env` dosyasını atomik olarak oluşturur.
 
 API geçici olarak erişilemezse bot eski bir içerik göndermez. Aynı aday için 1, 5, 15 dakika sonra; ardından aktif pencere kapanana kadar 30 dakikada bir yeniden dener.
 
