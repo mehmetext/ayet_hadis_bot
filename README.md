@@ -1,6 +1,6 @@
 # Ayet Hadis Bot
 
-Telegram bağlantısı henüz eklenmemiştir. Bot, planlı her gönderimde QuranEnc veya HadeethEnc API'sinden anlık içerik alır ve konsola yazar. Ayet/hadis metni, çeviri veya hadis listesi yerelde saklanmaz.
+Bot, Telegram polling ile kullanıcıları yönetir ve planlı her gönderimde QuranEnc veya HadeethEnc API'sinden anlık içerik alır. Ayet/hadis metni, çeviri veya hadis listesi yerelde saklanmaz.
 
 SQLite yalnızca gönderim sırası, tekrar engeli ve başarısız denemelerin durumunu `/data/bot.db` içinde tutar. Desteklenen diller kodda sabittir: `ara`, `eng`, `tur`, `deu`.
 
@@ -40,6 +40,12 @@ docker compose up -d --build
 docker compose logs -f
 docker compose run --rm ayet-hadis-bot once
 ```
+
+## CI/CD
+
+`main` branch'ine yapılan her commit, GitHub Actions tarafından test edilip Docker image olarak GHCR'a gönderilir. Pipeline daha sonra SSH ile sunucuya bağlanır, yalnız bu projenin klasöründe `docker compose pull` ve `docker compose up -d` çalıştırır. Sunucuda Docker build yapılmaz ve başka projelerin image'ları temizlenmez.
+
+Sunucuda proje klasöründe bir kez `.env` oluşturup token ve diğer ayarları doldur. GitHub repository ayarlarında şu Actions secret'larını tanımla: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `GHCR_USERNAME`, `GHCR_TOKEN`. `GHCR_TOKEN` yalnız `read:packages` yetkisine sahip bir classic PAT olmalı.
 
 API geçici olarak erişilemezse bot eski bir içerik göndermez. Aynı aday için 1, 5, 15 dakika sonra; ardından aktif pencere kapanana kadar 30 dakikada bir yeniden dener.
 

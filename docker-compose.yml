@@ -1,6 +1,7 @@
 services:
   ayet-hadis-bot:
     build: .
+    image: ghcr.io/mehmetext/ayet_hadis_bot:main
     restart: unless-stopped
     env_file:
       - .env
