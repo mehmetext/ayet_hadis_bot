@@ -26,6 +26,10 @@ Telegram bot: [@hadis_ayet_bot](https://t.me/hadis_ayet_bot)
 /help      Show the command list
 ```
 
+The application registers this command list with Telegram during startup. The
+same commands should also be configured in BotFather so Telegram shows them
+before the bot's first successful startup.
+
 After `/start`, the bot explains its schedule and verse/hadith rotation, then shows the language buttons. Subscription does not send an immediate content message; the user joins the next planned delivery.
 
 ## How it works
@@ -132,6 +136,19 @@ DATA_DIR
 
 - [QuranEnc API](https://quranenc.com/nqo/home/api)
 - [HadeethEnc](https://hadeethenc.com)
+
+## BotFather checklist
+
+Configure these public-facing settings with `/mybots` in `@BotFather`:
+
+1. Set the command list to the five commands shown above.
+2. Set a short description explaining that the bot sends scheduled Quran
+   verses and hadiths in the selected language.
+3. Set an about text and profile picture.
+4. Keep Group Privacy Mode enabled and disable group access if this bot is
+   intended only for private subscriptions.
+5. Leave Inline Mode disabled; this bot does not implement inline queries.
+6. Do not configure a webhook; the application uses long polling.
 
 ## Contributing
 

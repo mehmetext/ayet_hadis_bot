@@ -37,6 +37,10 @@ type Bot struct {
 func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeSettings) (*Bot, error) {
 	instance := &Bot{store: userStore, logger: logger, welcome: welcome}
 	client, err := bot.New(token,
+		bot.WithAllowedUpdates(allowedUpdates()),
+		bot.WithErrorsHandler(func(err error) {
+			logger.Printf("Telegram polling: %v", err)
+		}),
 		bot.WithMessageTextHandler("/start", bot.MatchTypePrefix, instance.start),
 		bot.WithMessageTextHandler("/stop", bot.MatchTypeExact, instance.stop),
 		bot.WithMessageTextHandler("/language", bot.MatchTypeExact, instance.language),
@@ -51,6 +55,13 @@ func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeS
 	return instance, nil
 }
 
+func (instance *Bot) Initialize(ctx context.Context) error {
+	if _, err := instance.client.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: commandDefinitions()}); err != nil {
+		return fmt.Errorf("set Telegram commands: %w", err)
+	}
+	return nil
+}
+
 func (instance *Bot) Start(ctx context.Context) { instance.client.Start(ctx) }
 
 // Broadcast sends one language's shared content to every active subscriber.
@@ -61,8 +72,13 @@ func (instance *Bot) Broadcast(ctx context.Context, languageCode, message string
 		return err
 	}
 	for _, userID := range users {
-		chunks := splitMessage(message, 4096)
+		chunks := splitMessage(message, telegramMessageLimit)
 		if err := instance.sendChunks(ctx, userID, chunks); err != nil {
+			if isUserUnavailableError(err) {
+				if unsubscribeErr := instance.store.UnsubscribeTelegramUser(ctx, userID); unsubscribeErr != nil {
+					instance.logger.Printf("deactivate unavailable user=%d: %v", userID, unsubscribeErr)
+				}
+			}
 			instance.logger.Printf("Telegram delivery user=%d language=%s: %v", userID, languageCode, err)
 			continue
 		}
@@ -70,6 +86,10 @@ func (instance *Bot) Broadcast(ctx context.Context, languageCode, message string
 	}
 	instance.logger.Printf("notification=finished language=%s recipients=%d", languageCode, len(users))
 	return nil
+}
+
+func isUserUnavailableError(err error) bool {
+	return errors.Is(err, bot.ErrorForbidden)
 }
 
 func (instance *Bot) sendChunks(ctx context.Context, userID int64, chunks []string) error {
@@ -121,11 +141,20 @@ func (instance *Bot) sendMessage(ctx context.Context, userID int64, message stri
 }
 
 func (instance *Bot) start(ctx context.Context, client *bot.Bot, update *models.Update) {
-	if update.Message == nil {
+	if update.Message == nil || update.Message.From == nil || !isStartCommand(update.Message.Text) {
 		return
 	}
 	instance.logger.Printf("command=/start user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
 	instance.sendLanguagePicker(ctx, client, update.Message.Chat.ID, welcomeMessage(instance.welcome))
+}
+
+func isStartCommand(text string) bool {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false
+	}
+	command := strings.SplitN(fields[0], "@", 2)[0]
+	return command == "/start"
 }
 
 func welcomeMessage(settings WelcomeSettings) string {
@@ -166,7 +195,9 @@ func (instance *Bot) selectLanguage(ctx context.Context, client *bot.Bot, update
 	if query == nil {
 		return
 	}
-	_, _ = client.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: query.ID})
+	if _, err := client.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: query.ID}); err != nil {
+		instance.logger.Printf("answer language callback: %v", err)
+	}
 	languageCode := strings.TrimPrefix(query.Data, "language:")
 	if _, found := catalog.Find(languageCode); !found {
 		return

@@ -57,6 +57,9 @@ func main() {
 		if err != nil {
 			logger.Fatal(err)
 		}
+		if err := telegramBot.Initialize(ctx); err != nil {
+			logger.Fatal(err)
+		}
 		service.Broadcaster = telegramBot.Broadcast
 		go telegramBot.Start(ctx)
 		runSchedule(ctx, configuration, database, service, logger)
