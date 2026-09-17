@@ -1,59 +1,162 @@
-# Ayet Hadis Bot
+# Ayet & Hadis Botu
 
-Bot, Telegram polling ile kullanıcıları yönetir ve planlı her gönderimde QuranEnc veya HadeethEnc API'sinden anlık içerik alır. Ayet/hadis metni, çeviri veya hadis listesi yerelde saklanmaz.
+QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri belirlenen saatlerde Telegram abonelerine gönderen, Go ve SQLite tabanlı açık kaynak bir bot.
 
-SQLite yalnızca gönderim sırası, tekrar engeli ve başarısız denemelerin durumunu `/data/bot.db` içinde tutar. Desteklenen diller kodda sabittir: `ara`, `eng`, `tur`, `deu`.
+Telegram botu: [@hadis_ayet_bot](https://t.me/hadis_ayet_bot)
 
-## Komutlar
+## Özellikler
 
-```sh
-go run ./cmd/ayet-hadis-bot once # Anlık API'den tek içerik alır.
-go run ./cmd/ayet-hadis-bot run  # Zaman penceresinde çalışır.
+- Telegram polling ile çalışır; webhook veya reverse proxy gerektirmez.
+- Kullanıcı `/start` ile kayıt olur ve dilini seçer.
+- Arapça, İngilizce, Türkçe ve Almanca desteklenir.
+- Ayet ve hadis gönderimleri dönüşümlü ilerler.
+- Aynı dildeki aboneler ortak içerik akışını paylaşır.
+- Her gün belirlenen saat penceresinde eşit aralıklı bildirim gönderir.
+- İçerik metinleri yerelde cache’lenmez; SQLite yalnızca sıra, tekrar geçmişi ve kullanıcı durumunu tutar.
+- API veya Telegram geçici olarak erişilemezse retry/pending mekanizması kullanılır.
+- Docker image’ı GitHub Container Registry’de tutulur ve `main` commit’leri otomatik deploy edilir.
+
+## Telegram komutları
+
+```text
+/start     Abone ol ve bildirim dilini seç
+/stop      Bildirimleri durdur
+/language  Bildirim dilini değiştir
+/status    Dil ve abonelik durumunu göster
+/help      Komut listesini göster
 ```
 
-`sync` komutu yoktur; ilk kurulumda arşiv indirilmez.
+`/start` sonrasında kullanıcıya botun çalışma saatleri ve ayet/hadis akışı açıklanır. Dil seçilmeden abonelik başlatılmaz. Abone olunduğu anda içerik gönderilmez; kullanıcı bir sonraki planlı bildirime dahil olur.
 
-## Ayarlar
+## Çalışma modeli
 
-Tüm çalışma ayarlarının tek kaynağı proje kökündeki `.env` dosyasıdır. Bir kez oluştur:
+Bot her bildirim slotunda:
+
+1. Aktif aboneliği olan dilleri SQLite’tan bulur.
+2. O dil için sıradaki içerik türünü (`ayet` veya `hadis`) okur.
+3. QuranEnc veya HadeethEnc API’sinden tek içeriği alır.
+4. Aynı dildeki aktif abonelere gönderir.
+5. Başarılı teslimden sonra sıra ve tekrar geçmişini transaction içinde günceller.
+
+İçerik metni, çeviri veya hadis listesi diske yazılmaz. Uzun Telegram mesajları 4096 karakter sınırını aşarsa eksiltilmeden ardışık parçalara bölünür.
+
+## Gereksinimler
+
+- Go 1.26 veya üzeri
+- Docker ve Docker Compose
+- Telegram BotFather token’ı
+
+## Lokal çalıştırma
+
+Önce ayar dosyasını oluştur:
 
 ```sh
 cp .env.example .env
 ```
 
-Ardından saat aralığı ve bildirim sayısını yalnız `.env` içinde değiştir. Uygulama lokal çalışırken bu dosyayı kendisi okur; Docker Compose da aynı dosyayı konteynere verir. Eksik bir değer varsa uygulama hangi değerin eksik olduğunu söyleyerek başlatmayı durdurur.
-
-`CONSOLE_LANGUAGE` konsol akışının dilini (`ara`, `eng`, `tur` veya `deu`) belirler. Telegram kullanıcı tercihleri eklenene kadar gönderimler bu tek dil için yapılır.
-
-Telegram’ı çalıştırmak için `.env` içinde BotFather’dan aldığın token’ı doldur:
-
-```env
-TELEGRAM_BOT_TOKEN=bot-token-buraya
-```
-
-Token’ı Git’e veya loglara ekleme; `.env` dosyası `.gitignore` içindedir.
-
-`DATA_DIR=data` hem lokal kullanımda proje içindeki `data/bot.db` yolunu, hem Docker içinde kalıcı `bot-data` volume'unu ifade eder. Bu değeri normalde değiştirmen gerekmez.
+`.env` içinde Telegram token’ını ve çalışma ayarlarını doldur. Ardından:
 
 ```sh
-docker compose up -d --build
-docker compose logs -f
-docker compose run --rm ayet-hadis-bot once
+go run ./cmd/ayet-hadis-bot once
 ```
 
-## CI/CD
+Bu komut API’den tek bir içerik alıp konsola yazdırır; Telegram’a mesaj göndermez.
 
-`main` branch'ine yapılan her commit, GitHub Actions tarafından test edilip Docker image olarak GHCR'a gönderilir. Pipeline daha sonra SSH ile sunucuya bağlanır, yalnız bu projenin klasöründe `docker compose pull` ve `docker compose up -d` çalıştırır. Sunucuda Docker build yapılmaz ve başka projelerin image'ları temizlenmez.
+Scheduler ve Telegram polling’i birlikte çalıştırmak için:
 
-Sunucuda yalnızca boş bir deployment klasörü oluştur; repository’yi sunucuda clone etmene veya `.env` dosyasını elle yazmana gerek yok. Pipeline her deploy’da güncel `docker-compose.yml` dosyasını ve GitHub’daki ayarlardan üretilen `.env` dosyasını SCP/SSH ile gönderir. GitHub repository ayarlarında şu Actions secret'larını tanımla: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY_B64`, `GHCR_USERNAME`, `GHCR_TOKEN`, `TELEGRAM_BOT_TOKEN`. `GHCR_TOKEN` yalnız `read:packages` yetkisine sahip bir classic PAT olmalı.
+```sh
+go run ./cmd/ayet-hadis-bot run
+```
 
-`DEPLOY_SSH_KEY_B64`, Actions runner’ında satır sonu bozulmaması için Base64’e çevrilmiş private SSH key olmalıdır. Oluşturmak için lokalinde `base64 -i ~/.ssh/deploy_key | tr -d '\n'` çalıştırıp çıktıyı secret olarak kaydet; private key’in kendisini loglara veya sohbete yapıştırma.
+## Docker ile çalıştırma
 
-GitHub Actions Variables olarak şu çalışma ayarlarını ekle: `TIMEZONE`, `CONSOLE_LANGUAGE`, `SEND_WINDOW_START`, `SEND_WINDOW_END`, `DAILY_NOTIFICATION_COUNT`, `HTTP_TIMEOUT_SECONDS`, `DATA_DIR`. Pipeline bu değerlerden sunucuda izinleri `0600` olan `.env` dosyasını atomik olarak oluşturur.
+```sh
+cp .env.example .env
+# .env dosyasını düzenle
+docker compose up -d --build
+docker compose logs -f
+```
 
-API geçici olarak erişilemezse bot eski bir içerik göndermez. Aynı aday için 1, 5, 15 dakika sonra; ardından aktif pencere kapanana kadar 30 dakikada bir yeniden dener.
+SQLite verisi `bot-data` isimli kalıcı Docker volume’unda tutulur. Konteyner yeniden başlatıldığında kullanıcılar, sıra ve tekrar geçmişi korunur.
+
+## Yapılandırma
+
+Çalışma ayarlarının tek kaynağı `.env` dosyasıdır:
+
+```env
+TIMEZONE=Europe/Istanbul
+CONSOLE_LANGUAGE=ara
+SEND_WINDOW_START=06:30
+SEND_WINDOW_END=22:30
+DAILY_NOTIFICATION_COUNT=4
+HTTP_TIMEOUT_SECONDS=30
+DATA_DIR=data
+TELEGRAM_BOT_TOKEN=
+```
+
+`06:30–22:30` ve `DAILY_NOTIFICATION_COUNT=4` için slotlar başlangıç ve bitiş dahil edilerek hesaplanır: `06:30`, `11:50`, `17:10`, `22:30`.
+
+`.env` dosyası ve Telegram token’ı kesinlikle commit edilmemelidir. `.env` `.gitignore` ve `.dockerignore` ile dışarıda tutulur.
+
+## CI/CD ve sunucu kurulumu
+
+`main` branch’ine yapılan her commit [GitHub Actions workflow’u](.github/workflows/deploy.yml) tarafından test edilir, Docker image olarak GHCR’a gönderilir ve SSH üzerinden sunucuya deploy edilir.
+
+Sunucuda repository clone edilmez ve Docker build yapılmaz. Pipeline yalnızca güncel `docker-compose.yml` dosyasını, GitHub ayarlarından oluşturulan `.env` dosyasını ve GHCR image’ını kullanır.
+
+GitHub Actions Secrets:
+
+```text
+DEPLOY_HOST
+DEPLOY_USER
+DEPLOY_PATH
+DEPLOY_SSH_KEY_B64
+GHCR_USERNAME
+GHCR_TOKEN
+TELEGRAM_BOT_TOKEN
+```
+
+GitHub Actions Variables:
+
+```text
+TIMEZONE
+CONSOLE_LANGUAGE
+SEND_WINDOW_START
+SEND_WINDOW_END
+DAILY_NOTIFICATION_COUNT
+HTTP_TIMEOUT_SECONDS
+DATA_DIR
+```
+
+`DEPLOY_SSH_KEY_B64`, satır sonu sorunlarını önlemek için Base64’e çevrilmiş private SSH key olmalıdır. `GHCR_TOKEN` private image pull etmek için en az `read:packages` yetkisine sahip classic PAT olmalıdır.
 
 ## Kaynaklar
 
 - [QuranEnc API](https://quranenc.com/nqo/home/api)
-- [HadeethEnc API](https://hadeethenc.com)
+- [HadeethEnc](https://hadeethenc.com)
+
+## Katkıda bulunma
+
+Katkı sağlamak isteyenler şu akışı kullanabilir:
+
+1. Repository’yi fork’la.
+2. Yeni bir branch oluştur:
+
+   ```sh
+   git checkout -b feature/aciklama
+   ```
+
+3. Değişiklikleri yap ve testleri çalıştır:
+
+   ```sh
+   go test ./...
+   ```
+
+4. Commit oluşturup fork’ına push et.
+5. `main` branch’ine Pull Request aç.
+
+Pull Request açıklamasında yapılan değişikliği, test sonuçlarını ve varsa davranış değişikliklerini belirt. Yeni özelliklerde mevcut API, SQLite tekrar engeli, Telegram komutları ve Docker çalışma modelinin bozulmadığını doğrula.
+
+## Lisans
+
+Bu repository için lisans henüz belirtilmemiştir. Katkı göndermeden önce repository sahibinin lisans kararını kontrol et.
