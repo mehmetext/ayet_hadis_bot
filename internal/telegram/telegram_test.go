@@ -7,7 +7,7 @@ import (
 
 func TestWelcomeMessageIncludesScheduleAndSequence(t *testing.T) {
 	message := welcomeMessage(WelcomeSettings{Start: "06:30", End: "22:30", DailyCount: 4})
-	for _, expected := range []string{"Ayet & Hadis Botu", "06:30", "22:30", "4 bildirim", "ayet ve hadis sırayla"} {
+	for _, expected := range []string{"Ayet & Hadis Botu", "06:30", "22:30", "4 bildirim", "ayet ve hadis sırayla", "/start", "/stop", "/language", "/status", "/help"} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("welcome message missing %q: %s", expected, message)
 		}

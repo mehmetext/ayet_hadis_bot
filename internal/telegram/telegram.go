@@ -41,6 +41,7 @@ func New(token string, userStore UserStore, logger *log.Logger, welcome WelcomeS
 		bot.WithMessageTextHandler("/stop", bot.MatchTypeExact, instance.stop),
 		bot.WithMessageTextHandler("/language", bot.MatchTypeExact, instance.language),
 		bot.WithMessageTextHandler("/status", bot.MatchTypeExact, instance.status),
+		bot.WithMessageTextHandler("/help", bot.MatchTypeExact, instance.help),
 		bot.WithCallbackQueryDataHandler("language:", bot.MatchTypePrefix, instance.selectLanguage),
 	)
 	if err != nil {
@@ -63,8 +64,11 @@ func (instance *Bot) Broadcast(ctx context.Context, languageCode, message string
 		chunks := splitMessage(message, 4096)
 		if err := instance.sendChunks(ctx, userID, chunks); err != nil {
 			instance.logger.Printf("Telegram delivery user=%d language=%s: %v", userID, languageCode, err)
+			continue
 		}
+		instance.logger.Printf("notification=sent user=%d language=%s parts=%d", userID, languageCode, len(chunks))
 	}
+	instance.logger.Printf("notification=finished language=%s recipients=%d", languageCode, len(users))
 	return nil
 }
 
@@ -120,17 +124,33 @@ func (instance *Bot) start(ctx context.Context, client *bot.Bot, update *models.
 	if update.Message == nil {
 		return
 	}
+	instance.logger.Printf("command=/start user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
 	instance.sendLanguagePicker(ctx, client, update.Message.Chat.ID, welcomeMessage(instance.welcome))
 }
 
 func welcomeMessage(settings WelcomeSettings) string {
-	return fmt.Sprintf("Ayet & Hadis Botu'na hoş geldin.\n\nBu bot, QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri anlık olarak paylaşır. \n\nHer gün %s–%s arasında %d bildirim göndeririz. Bildirimler ayet ve hadis sırayla olacak şekilde ilerler.\n\nBaşlamak için bildirim dilini seç:", settings.Start, settings.End, settings.DailyCount)
+	return fmt.Sprintf("Ayet & Hadis Botu'na hoş geldin.\n\nBu bot, QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri anlık olarak paylaşır.\n\nHer gün %s–%s arasında %d bildirim göndeririz. Bildirimler ayet ve hadis sırayla olacak şekilde ilerler.\n\nKomutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/help — Bu yardım mesajını göster\n\nBaşlamak için bildirim dilini seç:", settings.Start, settings.End, settings.DailyCount)
+}
+
+func (instance *Bot) help(ctx context.Context, client *bot.Bot, update *models.Update) {
+	if update.Message == nil {
+		return
+	}
+	instance.logger.Printf("command=/help user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
+	if _, err := client.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: helpMessage()}); err != nil {
+		instance.logger.Printf("Telegram help response: %v", err)
+	}
+}
+
+func helpMessage() string {
+	return "Komutlar:\n/start — Abone ol ve dil seç\n/stop — Bildirimleri durdur\n/language — Bildirim dilini değiştir\n/status — Abonelik durumunu gör\n/help — Bu yardım mesajını göster"
 }
 
 func (instance *Bot) language(ctx context.Context, client *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
 	}
+	instance.logger.Printf("command=/language user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
 	instance.sendLanguagePicker(ctx, client, update.Message.Chat.ID, "Bildirim dilini seç:")
 }
 
@@ -155,6 +175,7 @@ func (instance *Bot) selectLanguage(ctx context.Context, client *bot.Bot, update
 		instance.logger.Printf("save Telegram user: %v", err)
 		return
 	}
+	instance.logger.Printf("subscription=active user=%d language=%s", query.From.ID, languageCode)
 	_, err := client.SendMessage(ctx, &bot.SendMessageParams{ChatID: query.From.ID, Text: fmt.Sprintf("%s dilinde bildirimlere abone oldun.", languageName(languageCode))})
 	if err != nil {
 		instance.logger.Printf("Telegram language confirmation: %v", err)
@@ -165,10 +186,12 @@ func (instance *Bot) stop(ctx context.Context, client *bot.Bot, update *models.U
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
+	instance.logger.Printf("command=/stop user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
 	if err := instance.store.UnsubscribeTelegramUser(ctx, update.Message.From.ID); err != nil {
 		instance.logger.Printf("unsubscribe Telegram user: %v", err)
 		return
 	}
+	instance.logger.Printf("subscription=inactive user=%d", update.Message.From.ID)
 	_, err := client.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Bildirim aboneliğin durduruldu. Yeniden başlamak için /start yazabilirsin."})
 	if err != nil {
 		instance.logger.Printf("Telegram stop confirmation: %v", err)
@@ -179,6 +202,7 @@ func (instance *Bot) status(ctx context.Context, client *bot.Bot, update *models
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
+	instance.logger.Printf("command=/status user=%d chat=%d", update.Message.From.ID, update.Message.Chat.ID)
 	user, found, err := instance.store.TelegramUser(ctx, update.Message.From.ID)
 	if err != nil {
 		instance.logger.Printf("read Telegram user: %v", err)
