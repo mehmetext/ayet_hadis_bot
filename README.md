@@ -1,87 +1,85 @@
-# Ayet & Hadis Botu
+# Ayet & Hadith Bot
 
-QuranEnc ve HadeethEnc kaynaklarından ayet ve hadisleri belirlenen saatlerde Telegram abonelerine gönderen, Go ve SQLite tabanlı açık kaynak bir bot.
+An open-source Go and SQLite bot that fetches verses and hadiths from QuranEnc and HadeethEnc and sends them to Telegram subscribers during configured hours.
 
-Telegram botu: [@hadis_ayet_bot](https://t.me/hadis_ayet_bot)
+Telegram bot: [@hadis_ayet_bot](https://t.me/hadis_ayet_bot)
 
-## Özellikler
+## Features
 
-- Telegram polling ile çalışır; webhook veya reverse proxy gerektirmez.
-- Kullanıcı `/start` ile kayıt olur ve dilini seçer.
-- Arapça, İngilizce, Türkçe ve Almanca desteklenir.
-- Ayet ve hadis gönderimleri dönüşümlü ilerler.
-- Aynı dildeki aboneler ortak içerik akışını paylaşır.
-- Her gün belirlenen saat penceresinde eşit aralıklı bildirim gönderir.
-- İçerik metinleri yerelde cache’lenmez; SQLite yalnızca sıra, tekrar geçmişi ve kullanıcı durumunu tutar.
-- API veya Telegram geçici olarak erişilemezse retry/pending mekanizması kullanılır.
-- Docker image’ı GitHub Container Registry’de tutulur ve `main` commit’leri otomatik deploy edilir.
+- Uses Telegram polling; no webhook, public HTTPS endpoint, or reverse proxy is required.
+- Users subscribe with `/start` and choose their language.
+- Supports Arabic, English, Turkish, and German.
+- Alternates between verse and hadith deliveries.
+- Subscribers using the same language share one global content stream.
+- Sends evenly distributed notifications inside the configured daily window.
+- Does not cache content locally; SQLite stores only delivery state, duplicate history, and user subscriptions.
+- Retries temporary QuranEnc, HadeethEnc, and Telegram failures.
+- Builds and deploys automatically through GitHub Actions and GitHub Container Registry (GHCR).
 
-## Telegram komutları
+## Telegram commands
 
 ```text
-/start     Abone ol ve bildirim dilini seç
-/stop      Bildirimleri durdur
-/language  Bildirim dilini değiştir
-/status    Dil ve abonelik durumunu göster
-/help      Komut listesini göster
+/start     Subscribe and choose a notification language
+/stop      Stop notifications
+/language  Change the notification language
+/status    Show language and subscription status
+/help      Show the command list
 ```
 
-`/start` sonrasında kullanıcıya botun çalışma saatleri ve ayet/hadis akışı açıklanır. Dil seçilmeden abonelik başlatılmaz. Abone olunduğu anda içerik gönderilmez; kullanıcı bir sonraki planlı bildirime dahil olur.
+After `/start`, the bot explains its schedule and verse/hadith rotation, then shows the language buttons. Subscription does not send an immediate content message; the user joins the next planned delivery.
 
-## Çalışma modeli
+## How it works
 
-Bot her bildirim slotunda:
+At each scheduled slot, the bot:
 
-1. Aktif aboneliği olan dilleri SQLite’tan bulur.
-2. O dil için sıradaki içerik türünü (`ayet` veya `hadis`) okur.
-3. QuranEnc veya HadeethEnc API’sinden tek içeriği alır.
-4. Aynı dildeki aktif abonelere gönderir.
-5. Başarılı teslimden sonra sıra ve tekrar geçmişini transaction içinde günceller.
+1. Finds languages with active Telegram subscribers in SQLite.
+2. Reads the next content type (`verse` or `hadith`) for each language.
+3. Fetches one item from QuranEnc or HadeethEnc.
+4. Sends it to all active subscribers of that language.
+5. Atomically records the successful delivery and advances the rotation.
 
-İçerik metni, çeviri veya hadis listesi diske yazılmaz. Uzun Telegram mesajları 4096 karakter sınırını aşarsa eksiltilmeden ardışık parçalara bölünür.
+Verse and hadith text is never written to disk. Messages longer than Telegram’s 4096-character limit are split into consecutive parts without truncating content.
 
-## Gereksinimler
+## Requirements
 
-- Go 1.26 veya üzeri
-- Docker ve Docker Compose
-- Telegram BotFather token’ı
+- Go 1.26 or newer
+- Docker and Docker Compose
+- A Telegram BotFather token
 
-## Lokal çalıştırma
+## Run locally
 
-Önce ayar dosyasını oluştur:
+Create the local configuration file:
 
 ```sh
 cp .env.example .env
 ```
 
-`.env` içinde Telegram token’ını ve çalışma ayarlarını doldur. Ardından:
+Fill in the Telegram token and other values in `.env`. To fetch and print one item without sending it to Telegram:
 
 ```sh
 go run ./cmd/ayet-hadis-bot once
 ```
 
-Bu komut API’den tek bir içerik alıp konsola yazdırır; Telegram’a mesaj göndermez.
-
-Scheduler ve Telegram polling’i birlikte çalıştırmak için:
+To run the scheduler and Telegram polling together:
 
 ```sh
 go run ./cmd/ayet-hadis-bot run
 ```
 
-## Docker ile çalıştırma
+## Run with Docker
 
 ```sh
 cp .env.example .env
-# .env dosyasını düzenle
+# Edit .env
 docker compose up -d --build
 docker compose logs -f
 ```
 
-SQLite verisi `bot-data` isimli kalıcı Docker volume’unda tutulur. Konteyner yeniden başlatıldığında kullanıcılar, sıra ve tekrar geçmişi korunur.
+SQLite is stored in the persistent `bot-data` Docker volume. Users, rotation state, and duplicate history survive container restarts.
 
-## Yapılandırma
+## Configuration
 
-Çalışma ayarlarının tek kaynağı `.env` dosyasıdır:
+`.env` is the single source of runtime configuration:
 
 ```env
 TIMEZONE=Europe/Istanbul
@@ -94,17 +92,17 @@ DATA_DIR=data
 TELEGRAM_BOT_TOKEN=
 ```
 
-`06:30–22:30` ve `DAILY_NOTIFICATION_COUNT=4` için slotlar başlangıç ve bitiş dahil edilerek hesaplanır: `06:30`, `11:50`, `17:10`, `22:30`.
+With `06:30–22:30` and `DAILY_NOTIFICATION_COUNT=4`, the inclusive slots are `06:30`, `11:50`, `17:10`, and `22:30`.
 
-`.env` dosyası ve Telegram token’ı kesinlikle commit edilmemelidir. `.env` `.gitignore` ve `.dockerignore` ile dışarıda tutulur.
+Never commit `.env` or a Telegram token. `.env` is excluded by both `.gitignore` and `.dockerignore`.
 
-## CI/CD ve sunucu kurulumu
+## CI/CD and server deployment
 
-`main` branch’ine yapılan her commit [GitHub Actions workflow’u](.github/workflows/deploy.yml) tarafından test edilir, Docker image olarak GHCR’a gönderilir ve SSH üzerinden sunucuya deploy edilir.
+Every commit to `main` is tested by the [GitHub Actions workflow](.github/workflows/deploy.yml), built as a Docker image, pushed to GHCR, and deployed to the server over SSH.
 
-Sunucuda repository clone edilmez ve Docker build yapılmaz. Pipeline yalnızca güncel `docker-compose.yml` dosyasını, GitHub ayarlarından oluşturulan `.env` dosyasını ve GHCR image’ını kullanır.
+The server does not clone the repository or build Docker images. The pipeline copies the current `docker-compose.yml`, generates `.env` from GitHub configuration, logs in to GHCR, pulls the image, and runs `docker compose up -d`.
 
-GitHub Actions Secrets:
+### GitHub Actions secrets
 
 ```text
 DEPLOY_HOST
@@ -116,7 +114,7 @@ GHCR_TOKEN
 TELEGRAM_BOT_TOKEN
 ```
 
-GitHub Actions Variables:
+### GitHub Actions variables
 
 ```text
 TIMEZONE
@@ -128,35 +126,35 @@ HTTP_TIMEOUT_SECONDS
 DATA_DIR
 ```
 
-`DEPLOY_SSH_KEY_B64`, satır sonu sorunlarını önlemek için Base64’e çevrilmiş private SSH key olmalıdır. `GHCR_TOKEN` private image pull etmek için en az `read:packages` yetkisine sahip classic PAT olmalıdır.
+`DEPLOY_SSH_KEY_B64` must be a Base64-encoded private SSH key to avoid multiline secret formatting issues. `GHCR_TOKEN` must be a classic PAT with at least `read:packages` permission for pulling the private image.
 
-## Kaynaklar
+## Sources
 
 - [QuranEnc API](https://quranenc.com/nqo/home/api)
 - [HadeethEnc](https://hadeethenc.com)
 
-## Katkıda bulunma
+## Contributing
 
-Katkı sağlamak isteyenler şu akışı kullanabilir:
+Contributions are welcome:
 
-1. Repository’yi fork’la.
-2. Yeni bir branch oluştur:
+1. Fork the repository.
+2. Create a feature branch:
 
    ```sh
-   git checkout -b feature/aciklama
+   git checkout -b feature/your-change
    ```
 
-3. Değişiklikleri yap ve testleri çalıştır:
+3. Make your changes and run the tests:
 
    ```sh
    go test ./...
    ```
 
-4. Commit oluşturup fork’ına push et.
-5. `main` branch’ine Pull Request aç.
+4. Commit and push your branch to your fork.
+5. Open a Pull Request against `main`.
 
-Pull Request açıklamasında yapılan değişikliği, test sonuçlarını ve varsa davranış değişikliklerini belirt. Yeni özelliklerde mevcut API, SQLite tekrar engeli, Telegram komutları ve Docker çalışma modelinin bozulmadığını doğrula.
+Please describe the change, test results, and any behavior changes in the Pull Request. New features should preserve the API-based content flow, SQLite duplicate prevention, Telegram commands, and Docker deployment model.
 
-## Lisans
+## License
 
-Bu repository için lisans henüz belirtilmemiştir. Katkı göndermeden önce repository sahibinin lisans kararını kontrol et.
+No license has been specified for this repository yet. Check with the repository owner before redistributing the project or submitting substantial contributions.
